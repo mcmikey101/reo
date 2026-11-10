@@ -65,8 +65,9 @@ reo/
 | [docs/screens.md](docs/screens.md) | Экраны, их поведение и состояния |
 | [docs/decisions.md](docs/decisions.md) | Принятые решения, отличия макета, открытые вопросы |
 | [docs/conventions.md](docs/conventions.md) | Порты, переменные окружения, `/health`, структура |
+| [docs/db-schema.md](docs/db-schema.md) | Схема БД: таблицы, связи, ER-диаграмма, соглашения, миграции |
 
-Схема БД и контракты (`db-schema.md`, `api-contract.md`, `ml-contract.md`) появятся в задачах E0.
+Контракты (`api-contract.md`, `ml-contract.md`) появятся в задачах E0.
 
 ## Запуск
 

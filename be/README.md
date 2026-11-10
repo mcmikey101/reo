@@ -27,9 +27,10 @@ be/
 │   ├── routers/         # HTTP-слой: эндпоинты, без бизнес-логики
 │   ├── schemas/         # Pydantic-схемы запросов и ответов
 │   ├── services/        # бизнес-логика: что делает эндпоинт
-│   ├── models/          # модели SQLAlchemy — таблицы БД (REO-24)
+│   ├── models/          # модели SQLAlchemy — таблицы БД; base.py — Base и общие поля
 │   └── clients/         # клиенты внешних сервисов: ML-сервис, площадки отзывов
-├── alembic/             # миграции БД (появится в REO-24)
+├── alembic/             # миграции БД: env.py, versions/
+├── alembic.ini          # настройки Alembic
 ├── tests/               # тесты pytest
 ├── Dockerfile
 ├── pyproject.toml       # настройки ruff и pytest
@@ -41,9 +42,9 @@ be/
 | `routers/` | Эндпоинты: путь, метод, параметры, `response_model`, зависимости | Запросы к БД, вызовы ML, вычисления |
 | `schemas/` | Pydantic-модели входа и выхода API. Это контракт для фронта, его видно в `/docs` | Модели SQLAlchemy |
 | `services/` | Логика фичи: запросы к БД через сессию, вызовы `clients/`, расчёты | HTTP-детали (коды ответов, заголовки) |
-| `models/` | Таблицы SQLAlchemy. Каждая таблица с данными организации связана с `organization` | Pydantic-схемы |
+| `models/` | Таблицы SQLAlchemy по [../docs/db-schema.md](../docs/db-schema.md): наследуют `Base`, `UUIDPrimaryKeyMixin`, `TimestampMixin`; каждая таблица с данными организации связана с `organizations`. Новую модель импортируем в `models/__init__.py` | Pydantic-схемы |
 | `clients/` | Исходящие HTTP-вызовы: `ml.py` — ML-сервис по `docs/ml-contract.md`, парсеры площадок | Работу с БД |
-| `alembic/` | Миграции. Схема меняется только новой миграцией | — |
+| `alembic/` | Миграции. Схема меняется только новой миграцией (см. [«Миграции»](#миграции)) | Правки уже влитых миграций |
 | `tests/` | `test_<фича>.py`, общие фикстуры — в `conftest.py` | — |
 
 ### Как добавить новую фичу
@@ -94,6 +95,7 @@ source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 export DATABASE_URL=postgresql://user:pass@localhost:5432/reo   # Windows PowerShell: $env:DATABASE_URL="..."
 export ML_URL=http://localhost:8001
+alembic upgrade head
 uvicorn app.main:app --reload --port 8000
 ```
 
@@ -114,4 +116,37 @@ docker build -t reo-api be/
 docker run --rm -p 8000:8000 -e DATABASE_URL=... -e ML_URL=... reo-api
 ```
 
-Применение миграций при старте контейнера добавится в REO-24.
+Контейнер при старте выполняет `alembic upgrade head`, затем запускает uvicorn. Если БД недоступна или миграция упала, контейнер завершается с ошибкой (fail fast): API не работает на устаревшей схеме.
+
+## Миграции
+
+Схема и соглашения — [../docs/db-schema.md](../docs/db-schema.md). Alembic берёт строку подключения из `DATABASE_URL`. Команды — из папки `be/`:
+
+```bash
+alembic upgrade head                                  # применить все миграции
+alembic downgrade -1                                  # откатить последнюю
+alembic current                                       # текущая версия БД
+alembic heads                                         # головы: в main всегда одна
+alembic revision --autogenerate -m "add sources"      # новая миграция по изменённым моделям
+```
+
+Порядок изменения схемы:
+
+1. Изменить или добавить модель в `app/models/`, новую — импортировать в `app/models/__init__.py`.
+2. `alembic revision --autogenerate -m "…"` — файл появится в `alembic/versions/` с датой в имени и отформатируется ruff.
+3. Проверить файл руками: autogenerate не видит расширения, данные, переименования колонок и таблиц.
+4. `alembic upgrade head`, `alembic downgrade -1`, снова `alembic upgrade head` на локальной БД.
+5. Обновить `docs/db-schema.md` в том же PR, пометить Сергея, Михаила и Камиля.
+
+Влитую в `main` миграцию не редактируем — только новая миграция.
+
+### Тесты миграций
+
+`tests/test_migrations.py` применяет и откатывает миграции на настоящем PostgreSQL + pgvector и проверяет, что модели совпадают с миграциями. Без `TEST_DATABASE_URL` тесты пропускаются. Нужна **отдельная** БД — тесты удаляют все таблицы:
+
+```bash
+docker run -d --name reo-db-test -e POSTGRES_PASSWORD=reo -e POSTGRES_DB=reo_test -p 55432:5432 pgvector/pgvector:pg16
+export TEST_DATABASE_URL=postgresql://postgres:reo@localhost:55432/reo_test   # PowerShell: $env:TEST_DATABASE_URL="..."
+pytest
+docker rm -f reo-db-test
+```

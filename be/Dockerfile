@@ -9,10 +9,11 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY pyproject.toml .
+COPY pyproject.toml alembic.ini ./
+COPY alembic ./alembic
 COPY app ./app
 
 EXPOSE 8000
 
-# Применение миграций при старте добавится в REO-24
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Сначала миграции. Если БД недоступна или миграция упала, контейнер завершается (fail fast)
+CMD ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000"]

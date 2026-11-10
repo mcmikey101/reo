@@ -49,7 +49,8 @@ reo/
 ├── be/                  # бэкенд API (FastAPI, SQLAlchemy 2, Alembic)
 ├── ml/                  # ML-сервис (FastAPI), без доступа к БД
 ├── docs/                # продукт, правила данных, экраны, решения, соглашения, схема БД, контракты
-├── docker-compose.yml   # запуск всего проекта (появится в REO-18)
+├── docker-compose.yml   # запуск всего проекта
+├── .env.example         # образец переменных окружения
 ├── CLAUDE.md            # контекст для Claude Code
 └── README.md
 ```
@@ -71,7 +72,38 @@ reo/
 
 ## Запуск
 
-Будет описан в REO-18.
+Нужен Docker с Docker Compose v2. Из корня репозитория:
+
+```bash
+docker compose up --build
+```
+
+Первая сборка занимает несколько минут. Когда всё поднимется:
+
+| Сервис | Адрес |
+|---|---|
+| Фронтенд | http://localhost:5173 |
+| API, Swagger | http://localhost:8000/docs |
+| Проверка API, БД и ML | http://localhost:8000/health → `{"status": "ok", "db": "ok", "ml": "ok"}` |
+| ML-сервис | http://localhost:8001/health |
+| PostgreSQL | `localhost:5432`, пользователь, пароль и база — `reo` |
+
+- `api` стартует только после того, как PostgreSQL готов принимать подключения (healthcheck сервиса `db`), затем сам применяет миграции и демо-данные.
+- Данные БД хранятся в volume `reo_pgdata` и не пропадают при перезапуске.
+- Без файла `.env` используются значения по умолчанию. Чтобы их поменять (например, порт БД, если 5432 занят локальным PostgreSQL), скопируйте образец и отредактируйте: `cp .env.example .env`.
+- Код в контейнеры копируется при сборке: после изменений перезапустите с `--build`.
+
+Полезные команды:
+
+```bash
+docker compose up --build -d    # запустить в фоне
+docker compose ps               # состояние сервисов
+docker compose logs -f api      # логи одного сервиса
+docker compose down             # остановить, данные БД сохраняются
+docker compose down -v          # остановить и стереть данные БД
+```
+
+Запуск частей по отдельности, без Docker — в README каждой папки: [be](be/README.md), [ml](ml/README.md), [fe](fe/README.md).
 
 ## Как работаем
 

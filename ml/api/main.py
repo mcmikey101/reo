@@ -1,19 +1,20 @@
 """reo ML-сервис: точка входа FastAPI.
 
-Реализует часть контракта backend <-> ML v0.1 (docs/contract_backend_ml.md):
-GET /v1/health и POST /v1/sentiment.
+Реализует часть контракта backend <-> ML v0.1 (docs/ml-contract.md):
+GET /health, GET /v1/health и POST /v1/sentiment.
 
 Запуск: uvicorn ml.api.main:app --host 0.0.0.0 --port 8001
 """
 
 import logging
 from contextlib import asynccontextmanager
-from typing import Annotated, Any, Literal, Protocol
+from typing import Annotated, Any, ClassVar, Literal, Protocol
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 logger = logging.getLogger("reo_ml")
 
@@ -69,6 +70,7 @@ class HealthResponse(BaseModel):
     models: dict[str, str]
     mock: bool
 
+
 # Ошибки в формате контракта: {"error": {"code", "message", "details"}}
 
 class ServiceError(Exception):
@@ -80,7 +82,9 @@ class ServiceError(Exception):
         self.details = details
 
 
-def error_response(http_status: int, code: str, message: str, details: Any = None) -> JSONResponse:
+def error_response(
+    http_status: int, code: str, message: str, details: Any = None
+) -> JSONResponse:
     return JSONResponse(
         status_code=http_status,
         content={"error": {"code": code, "message": message, "details": details}},
@@ -125,7 +129,7 @@ class MockSentiment:
 
     version = "mock-0.1"
 
-    _SOFT: dict[Label, Probs] = {
+    _SOFT: ClassVar[dict[Label, Probs]] = {
         "positive": Probs(pos=0.80, neu=0.15, neg=0.05),
         "neutral": Probs(pos=0.20, neu=0.60, neg=0.20),
         "negative": Probs(pos=0.05, neu=0.15, neg=0.80),
@@ -133,7 +137,9 @@ class MockSentiment:
 
     def predict(self, reviews: list[ReviewIn]) -> list[Probs]:
         return [
-            self._SOFT[label_from_rating(r.rating) if r.rating is not None else "neutral"]
+            self._SOFT[
+                label_from_rating(r.rating) if r.rating is not None else "neutral"
+            ]
             for r in reviews
         ]
 
@@ -147,8 +153,14 @@ def has_text(review: ReviewIn) -> bool:
     return bool(review.text and review.text.strip())
 
 
-def build_result(review_id: str, method: Literal["model", "rating"], probs: Probs) -> SentimentResult:
-    scores: dict[Label, float] = {"positive": probs.pos, "neutral": probs.neu, "negative": probs.neg}
+def build_result(
+    review_id: str, method: Literal["model", "rating"], probs: Probs
+) -> SentimentResult:
+    scores: dict[Label, float] = {
+        "positive": probs.pos,
+        "neutral": probs.neu,
+        "negative": probs.neg,
+    }
     label = max(scores, key=scores.__getitem__)
     return SentimentResult(
         id=review_id,
@@ -172,7 +184,9 @@ def analyze(reviews: list[ReviewIn], model: SentimentModel) -> list[SentimentRes
             label = label_from_rating(review.rating)
             results[i] = build_result(review.id, "rating", HARD_PROBS[label])
         else:
-            results[i] = SentimentResult(id=review.id, status="skipped", reason="no_text_no_rating")
+            results[i] = SentimentResult(
+                id=review.id, status="skipped", reason="no_text_no_rating"
+            )
 
     if text_indices:
         # В модель уходит одна пачка с текстами, порядок результатов сохраняется
@@ -201,20 +215,40 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="reo ML", version="0.1.0", lifespan=lifespan)
 
 
+@app.exception_handler(StarletteHTTPException)
+async def http_error_handler(
+    request: Request, exc: StarletteHTTPException
+) -> JSONResponse:
+    codes = {404: "not_found", 405: "method_not_allowed"}
+    code = codes.get(exc.status_code, "http_error")
+    message = exc.detail if isinstance(exc.detail, str) else "HTTP-ошибка"
+    return error_response(exc.status_code, code, message, None)
+
+
 @app.exception_handler(ServiceError)
 async def service_error_handler(request: Request, exc: ServiceError) -> JSONResponse:
     return error_response(exc.http_status, exc.code, exc.message, exc.details)
 
 
+@app.get("/health")
+def health_simple() -> dict[str, str]:
+    return {"status": "ok"}
+
+
 @app.exception_handler(RequestValidationError)
-async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+async def validation_error_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
     errors = [
         {"field": ".".join(str(part) for part in e["loc"][1:]), "message": e["msg"]}
         for e in exc.errors()
     ]
     first = errors[0] if errors else {"field": "", "message": "invalid request"}
     return error_response(
-        422, "invalid_request", f"{first['field']}: {first['message']}", {"errors": errors}
+        422,
+        "invalid_request",
+        f"{first['field']}: {first['message']}",
+        {"errors": errors},
     )
 
 
@@ -244,4 +278,6 @@ def health(request: Request) -> HealthResponse | JSONResponse:
 @app.post("/v1/sentiment", response_model=SentimentResponse)
 def sentiment(body: SentimentRequest, request: Request) -> SentimentResponse:
     model = get_model(request)
-    return SentimentResponse(model_version=model.version, results=analyze(body.reviews, model))
+    return SentimentResponse(
+        model_version=model.version, results=analyze(body.reviews, model)
+    )

@@ -2,12 +2,10 @@
 
 Нужна отдельная пустая БД: тесты откатывают схему до нуля.
 Запуск: TEST_DATABASE_URL=postgresql://user:pass@localhost:5432/reo_test pytest
-Без TEST_DATABASE_URL тесты пропускаются.
+Без TEST_DATABASE_URL тесты пропускаются (фикстуры database_url и alembic_config — conftest.py).
 """
 
-import os
 from collections.abc import Iterator
-from pathlib import Path
 
 import pytest
 from alembic import command
@@ -17,28 +15,7 @@ from alembic.migration import MigrationContext
 from sqlalchemy import Engine, create_engine, inspect, text
 from sqlalchemy.exc import IntegrityError
 
-from app.config import Settings
 from app.models import Base
-
-BE_DIR = Path(__file__).resolve().parent.parent
-RAW_URL = os.environ.get("TEST_DATABASE_URL")
-
-pytestmark = pytest.mark.skipif(not RAW_URL, reason="TEST_DATABASE_URL не задан")
-
-
-@pytest.fixture(scope="module")
-def database_url() -> str:
-    # Та же нормализация строки, что и у приложения: postgresql:// → postgresql+psycopg://
-    return Settings(database_url=RAW_URL).database_url
-
-
-@pytest.fixture(scope="module")
-def alembic_config(database_url: str) -> Config:
-    config = Config(str(BE_DIR / "alembic.ini"))
-    config.set_main_option("script_location", str(BE_DIR / "alembic"))
-    config.attributes["database_url"] = database_url
-    config.attributes["configure_logger"] = False
-    return config
 
 
 @pytest.fixture(scope="module")

@@ -48,13 +48,25 @@ reo/
 ├── fe/                  # фронтенд (React + TypeScript + Vite)
 ├── be/                  # бэкенд API (FastAPI, SQLAlchemy 2, Alembic)
 ├── ml/                  # ML-сервис (FastAPI), без доступа к БД
-├── docs/                # соглашения, схема БД, контракты API и ML
+├── docs/                # продукт, правила данных, экраны, решения, соглашения, схема БД, контракты
 ├── docker-compose.yml   # запуск всего проекта (появится в REO-18)
 ├── CLAUDE.md            # контекст для Claude Code
 └── README.md
 ```
 
 Порты, переменные окружения, формат `/health` и другие договорённости — в [docs/conventions.md](docs/conventions.md).
+
+## Документация
+
+| Файл | О чём |
+|---|---|
+| [docs/product.md](docs/product.md) | Что делает reo, границы MVP, пути пользователя, глоссарий |
+| [docs/data-rules.md](docs/data-rules.md) | Как считаются показатели, правила для данных, импорта, прогноза, суммаризации |
+| [docs/screens.md](docs/screens.md) | Экраны, их поведение и состояния |
+| [docs/decisions.md](docs/decisions.md) | Принятые решения, отличия макета, открытые вопросы |
+| [docs/conventions.md](docs/conventions.md) | Порты, переменные окружения, `/health`, структура |
+
+Схема БД и контракты (`db-schema.md`, `api-contract.md`, `ml-contract.md`) появятся в задачах E0.
 
 ## Запуск
 

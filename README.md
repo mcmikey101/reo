@@ -66,8 +66,9 @@ reo/
 | [docs/decisions.md](docs/decisions.md) | Принятые решения, отличия макета, открытые вопросы |
 | [docs/conventions.md](docs/conventions.md) | Порты, переменные окружения, `/health`, структура |
 | [docs/db-schema.md](docs/db-schema.md) | Схема БД: таблицы, связи, ER-диаграмма, соглашения, миграции |
+| [docs/api-contract.md](docs/api-contract.md) | Контракт API для фронтенда: общие правила (ошибки, пагинация, даты), точки |
 
-Контракты (`api-contract.md`, `ml-contract.md`) появятся в задачах E0.
+Контракт «бэкенд ↔ ML» (`ml-contract.md`) появится в REO-26.
 
 ## Запуск
 

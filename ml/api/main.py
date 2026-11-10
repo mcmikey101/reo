@@ -1,10 +1,9 @@
 """reo ML-сервис: точка входа FastAPI.
 
 Реализует часть контракта backend <-> ML v0.1 (docs/contract_backend_ml.md):
-GET /v1/health и POST /v1/sentiment. Пока работает заглушка: тональность
-отзывов с текстом имитируется по звёздам, настоящая модель не загружается.
+GET /v1/health и POST /v1/sentiment.
 
-Запуск: uvicorn reo_ml.main:app --host 0.0.0.0 --port 8000
+Запуск: uvicorn ml.api.main:app --host 0.0.0.0 --port 8001
 """
 
 import logging
@@ -21,7 +20,7 @@ logger = logging.getLogger("reo_ml")
 MAX_BATCH = 256
 MAX_TEXT_CHARS = 10_000
 
-Label = Literal["positive", "neutral", "negative"]
+Label = Literal["negative", "neutral", "positive"]
 
 
 # ---------------------------------------------------------------------------
@@ -31,14 +30,12 @@ Label = Literal["positive", "neutral", "negative"]
 
 class ReviewIn(BaseModel):
     id: str = Field(min_length=1)
-    # Поля обязательны, но могут быть null — как в контракте
     text: str | None
     rating: Annotated[float, Field(ge=1, le=5)] | None
 
     @field_validator("text")
     @classmethod
     def truncate_text(cls, value: str | None) -> str | None:
-        # Длинный текст обрезаем, а не отклоняем: один отзыв не должен ронять пачку
         return value[:MAX_TEXT_CHARS] if value is not None else None
 
 
@@ -72,11 +69,7 @@ class HealthResponse(BaseModel):
     models: dict[str, str]
     mock: bool
 
-
-# ---------------------------------------------------------------------------
 # Ошибки в формате контракта: {"error": {"code", "message", "details"}}
-# ---------------------------------------------------------------------------
-
 
 class ServiceError(Exception):
     def __init__(self, http_status: int, code: str, message: str, details: Any = None):
@@ -250,7 +243,5 @@ def health(request: Request) -> HealthResponse | JSONResponse:
 
 @app.post("/v1/sentiment", response_model=SentimentResponse)
 def sentiment(body: SentimentRequest, request: Request) -> SentimentResponse:
-    # Обычный def, не async: FastAPI выполнит его в пуле потоков,
-    # и тяжёлый инференс настоящей модели не заблокирует event loop
     model = get_model(request)
     return SentimentResponse(model_version=model.version, results=analyze(body.reviews, model))

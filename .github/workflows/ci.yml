@@ -1,17 +1,23 @@
-# CI: проверки бэкенда (be/), ML-сервиса (ml/) и фронтенда (fe/) на каждый PR в main.
-# Каждая часть проверяется только если в PR изменились её файлы (job changes).
+# CI: проверки бэкенда (be/), ML-сервиса (ml/) и фронтенда (fe/) на каждый PR в main
+# и после каждого слияния в main.
+# В PR каждая часть проверяется, только если изменились её файлы (job changes).
+# После слияния в main и при ручном запуске проверяются все три части: так main
+# всегда проверен целиком, а кэш pip/npm, созданный на main, доступен всем PR.
 name: CI
 
 on:
   pull_request:
     branches: [main]
+  push:
+    branches: [main]
   # Ручной запуск во вкладке Actions — проверяет все три части
   workflow_dispatch:
 
-# Новый push в тот же PR отменяет ещё не закончившийся прогон
+# Новый push в тот же PR отменяет ещё не закончившийся прогон.
+# Прогоны на main не отменяются: каждое слияние должно быть проверено
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -44,7 +50,7 @@ jobs:
   be:
     name: be — ruff и pytest
     needs: changes
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.be == 'true'
+    if: github.event_name != 'pull_request' || needs.changes.outputs.be == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -80,7 +86,7 @@ jobs:
   ml:
     name: ml — ruff и pytest
     needs: changes
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.ml == 'true'
+    if: github.event_name != 'pull_request' || needs.changes.outputs.ml == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -100,7 +106,7 @@ jobs:
   fe:
     name: fe — lint, тесты и сборка
     needs: changes
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.fe == 'true'
+    if: github.event_name != 'pull_request' || needs.changes.outputs.fe == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:

@@ -1,0 +1,61 @@
+# Запуск всего проекта reo: docker compose up --build
+# Порты и переменные — docs/conventions.md. Значения по умолчанию можно
+# переопределить в файле .env рядом с этим файлом (образец — .env.example).
+
+name: reo
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-reo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-reo}
+      POSTGRES_DB: ${POSTGRES_DB:-reo}
+    ports:
+      # Внешний порт меняется через POSTGRES_PORT, если 5432 занят локальным PostgreSQL.
+      # Внутри Docker БД всегда доступна как db:5432
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      # Данные БД переживают перезапуск и docker compose down; стираются только down -v
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # -h localhost — проверка по сети. При первом запуске PostgreSQL сначала создаёт базу
+      # временным сервером, который слушает только сокет, поэтому db станет healthy
+      # лишь после настоящего старта
+      test: ["CMD-SHELL", "pg_isready -h localhost -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+
+  api:
+    build: ./be
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-reo}:${POSTGRES_PASSWORD:-reo}@db:5432/${POSTGRES_DB:-reo}
+      ML_URL: http://ml:8001
+    ports:
+      - "8000:8000"
+    depends_on:
+      # api при старте применяет миграции, поэтому ждёт, пока db станет healthy
+      db:
+        condition: service_healthy
+      ml:
+        condition: service_started
+
+  ml:
+    build: ./ml
+    ports:
+      - "8001:8001"
+
+  fe:
+    build: ./fe
+    environment:
+      # Адрес API для браузера пользователя, поэтому localhost, а не api
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:

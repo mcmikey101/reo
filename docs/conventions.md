@@ -54,8 +54,11 @@
 
 ## 5. Фронтенд
 
-- React + TypeScript + Vite.
-- Версию Node и линтер определяет Георгий в PR каркаса фронтенда.
+- React + TypeScript + Vite, Tailwind CSS.
+- Node.js **26** (LTS), версия — в `fe/.nvmrc`; в Docker — образ `node:26-slim`.
+- Линтер — **oxlint** (`fe/.oxlintrc.json`), проверка типов — `tsc`, тесты — Vitest.
+- Проверка в CI, в папке `fe/`: `npm ci`, `npm run lint`, `npm test`, `npm run build`.
+- Структура папки и запуск — [fe/README.md](../fe/README.md).
 
 ## 6. Docker
 

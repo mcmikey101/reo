@@ -1,0 +1,119 @@
+@import 'tailwindcss';
+
+/*
+ * Токены варианта A «Ясный» из макета Figma.
+ * В комментариях — имена переменных Figma (коллекция «Отклик · тема»).
+ * Классы Tailwind строятся из этих имён: bg-page, text-ink-2, border-line, text-h1, rounded-sheet и т. д.
+ */
+@theme {
+  --font-sans: 'Golos Text Variable', 'Golos Text', ui-sans-serif, system-ui, sans-serif;
+
+  /* Стандартная палитра Tailwind отключена: в интерфейсе только цвета макета */
+  --color-*: initial;
+
+  /* Фон и поверхности */
+  --color-page: #f1f2f4; /* Фон/страница */
+  --color-surface: #ffffff; /* Фон/поверхность */
+  --color-surface-2: #f6f7f8; /* Фон/поверхность 2 */
+  --color-surface-3: #eceef1; /* Фон/поверхность 3 */
+  --color-hover: #f1f2f4; /* Фон/наведение */
+  --color-row-hover: #f7f8f9; /* Фон/строка наведение */
+
+  /* Линии */
+  --color-line: #e1e4e8; /* Линии/шов */
+  --color-line-soft: #edeff2; /* Линии/мягкая */
+  --color-line-strong: #c5cad1; /* Линии/сильная */
+  --color-input-line: #d3d7dd; /* Линии/поле */
+
+  /* Текст */
+  --color-ink: #1b1e23; /* Текст/основной */
+  --color-ink-2: #4f555f; /* Текст/вторичный */
+  --color-ink-3: #646a74; /* Текст/третичный */
+  --color-white: #ffffff; /* Текст/на тёмном */
+
+  /* Акцент и элементы */
+  --color-accent: #1b1e23; /* Акцент/основная кнопка */
+  --color-accent-hover: #353940; /* Акцент/наведение */
+  --color-nav-active: #eef0f2; /* Элементы/меню активный */
+  --color-seg: #eef0f2; /* Элементы/сегменты фон */
+  --color-switch-off: #c9ced5; /* Элементы/переключатель выкл */
+  --color-check-line: #aeb4bc; /* Элементы/чекбокс рамка */
+  --color-avatar: #e4e7eb; /* Элементы/аватар */
+  --color-tip: #1b1e23; /* Элементы/подсказка фон */
+  --color-tip-ink-2: #b9bec6; /* Элементы/подсказка текст 2 */
+
+  /* Данные: тональность и статусы */
+  --color-pos: #1e8c4e; /* Данные/позитив */
+  --color-pos-ink: #187a43; /* Данные/позитив текст */
+  --color-pos-tint: #e3f3ea; /* Данные/позитив подложка */
+  --color-neg: #d2402d; /* Данные/негатив */
+  --color-neg-ink: #c23a28; /* Данные/негатив текст */
+  --color-neg-tint: #fbe7e3; /* Данные/негатив подложка */
+  --color-neu: #8a909a; /* Данные/нейтрально */
+  --color-warn: #b7791f; /* Данные/предупреждение */
+  --color-warn-ink: #6f470b; /* Данные/предупреждение текст */
+  --color-warn-tint: #fdf4e3; /* Данные/предупреждение подложка */
+  --color-warn-line: #f2ddb4; /* Данные/предупреждение рамка */
+
+  /* Графики */
+  --color-chart-main: #1b1e23; /* График/основная линия */
+  --color-chart-volume: #b3b8c0; /* График/объём */
+  --color-chart-grid: #edeff2; /* График/сетка */
+  --color-chart-axis: #c5cad1; /* График/ось */
+  --color-chart-1: #2f6fd6; /* График/серия 1 */
+  --color-chart-2: #8c7b10; /* График/серия 2 */
+  --color-chart-3: #7a55c7; /* График/серия 3 */
+  --color-chart-4: #c98200; /* График/серия 4 */
+  --color-chart-other: #a6acb4; /* График/остальные */
+
+  /* Типографика: размер / межстрочный / трекинг / начертание */
+  --text-h1: 26px; /* Заголовок/экрана 26 */
+  --text-h1--line-height: 30px;
+  --text-h1--letter-spacing: -0.015em;
+  --text-h1--font-weight: 700;
+  --text-brand: 17px; /* Логотип */
+  --text-brand--line-height: 22px;
+  --text-brand--letter-spacing: -0.01em;
+  --text-brand--font-weight: 700;
+  --text-panel: 17px; /* Заголовок/панели 17 */
+  --text-panel--line-height: 22px;
+  --text-panel--letter-spacing: -0.005em;
+  --text-panel--font-weight: 700;
+  --text-widget: 15px; /* Заголовок/виджета 15 */
+  --text-widget--line-height: 20px;
+  --text-widget--letter-spacing: -0.005em;
+  --text-widget--font-weight: 600;
+  --text-body: 14px; /* Текст/основной 14 */
+  --text-body--line-height: 20px;
+  --text-small: 13px; /* Текст/вторичный 13 */
+  --text-small--line-height: 18px;
+  --text-caption: 12px; /* Текст/подпись 12 */
+  --text-caption--line-height: 16px;
+  --text-axis: 11px; /* Графики/оси 11 */
+  --text-axis--line-height: 14px;
+
+  /* Скругления */
+  --radius-ctl: 8px; /* кнопки, поля, пункты меню */
+  --radius-card: 12px; /* панели и плашки */
+  --radius-sheet: 14px; /* листы и крупные карточки */
+
+  /* Тени */
+  --shadow-pop: 0 10px 30px rgb(20 24 30 / 0.16), 0 1px 3px rgb(20 24 30 / 0.08);
+  --shadow-drawer: -14px 0 36px rgb(20 24 30 / 0.12);
+}
+
+@layer base {
+  html {
+    color-scheme: light;
+  }
+
+  body {
+    @apply bg-page font-sans text-body text-ink antialiased;
+  }
+
+  /* Видимый фокус клавиатуры на всех элементах (docs/screens.md, «Доступность») */
+  :focus-visible {
+    outline: 2px solid var(--color-ink);
+    outline-offset: 2px;
+  }
+}

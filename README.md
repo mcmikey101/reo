@@ -35,7 +35,7 @@ reo собирает отзывы всех точек с площадок и и�
 
 | Часть | Технологии |
 |---|---|
-| Frontend | React, TypeScript, Vite |
+| Frontend | React, TypeScript, Vite, Tailwind CSS; Node.js 26 |
 | Backend | Python 3.11, FastAPI, SQLAlchemy 2, Alembic |
 | База данных | PostgreSQL 16 + pgvector (образ `pgvector/pgvector:pg16`) — эмбеддинги для кластеризации |
 | ML | Отдельный сервис на FastAPI, Python 3.11 |

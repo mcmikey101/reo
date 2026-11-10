@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from ml.api.main import app
+from api.main import app
 
 
 def test_health_returns_ok() -> None:

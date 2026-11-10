@@ -1,25 +1,29 @@
 """reo ML-сервис: точка входа FastAPI.
 
-Реализует часть контракта backend <-> ML v0.1 (docs/ml-contract.md):
+Реализует часть контракта backend <-> ML v0.2 (docs/ml-contract.md):
 GET /health, GET /v1/health и POST /v1/sentiment.
 
-Запуск: uvicorn ml.api.main:app --host 0.0.0.0 --port 8001
+Корень импортов — папка ml/. Запуск из ml/:
+    uvicorn api.main:app --host 0.0.0.0 --port 8001
 """
 
 import logging
+import math
+from collections import Counter
 from contextlib import asynccontextmanager
-from typing import Annotated, Any, ClassVar, Literal, Protocol
+from typing import Any, ClassVar, Literal, Protocol
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 logger = logging.getLogger("reo_ml")
 
 MAX_BATCH = 256
 MAX_TEXT_CHARS = 10_000
+RATING_MIN, RATING_MAX = 1, 5
 
 Label = Literal["negative", "neutral", "positive"]
 
@@ -32,7 +36,9 @@ Label = Literal["negative", "neutral", "positive"]
 class ReviewIn(BaseModel):
     id: str = Field(min_length=1)
     text: str | None
-    rating: Annotated[float, Field(ge=1, le=5)] | None
+    # Диапазон 1–5 проверяется в analyze(): оценка вне диапазона пропускает
+    # только этот отзыв (skipped, invalid_rating), а не всю пачку
+    rating: float | None
 
     @field_validator("text")
     @classmethod
@@ -42,6 +48,14 @@ class ReviewIn(BaseModel):
 
 class SentimentRequest(BaseModel):
     reviews: list[ReviewIn] = Field(min_length=1, max_length=MAX_BATCH)
+
+    @model_validator(mode="after")
+    def unique_ids(self) -> "SentimentRequest":
+        counts = Counter(r.id for r in self.reviews)
+        duplicates = sorted(review_id for review_id, n in counts.items() if n > 1)
+        if duplicates:
+            raise ValueError(f"id отзывов в пачке должны быть уникальны, повторяются: {duplicates}")
+        return self
 
 
 class Probs(BaseModel):
@@ -73,6 +87,7 @@ class HealthResponse(BaseModel):
 
 # Ошибки в формате контракта: {"error": {"code", "message", "details"}}
 
+
 class ServiceError(Exception):
     def __init__(self, http_status: int, code: str, message: str, details: Any = None):
         super().__init__(message)
@@ -82,9 +97,7 @@ class ServiceError(Exception):
         self.details = details
 
 
-def error_response(
-    http_status: int, code: str, message: str, details: Any = None
-) -> JSONResponse:
+def error_response(http_status: int, code: str, message: str, details: Any = None) -> JSONResponse:
     return JSONResponse(
         status_code=http_status,
         content={"error": {"code": code, "message": message, "details": details}},
@@ -137,9 +150,7 @@ class MockSentiment:
 
     def predict(self, reviews: list[ReviewIn]) -> list[Probs]:
         return [
-            self._SOFT[
-                label_from_rating(r.rating) if r.rating is not None else "neutral"
-            ]
+            self._SOFT[label_from_rating(r.rating) if r.rating is not None else "neutral"]
             for r in reviews
         ]
 
@@ -172,21 +183,27 @@ def build_result(
     )
 
 
+def has_valid_rating(review: ReviewIn) -> bool:
+    rating = review.rating
+    return rating is None or (math.isfinite(rating) and RATING_MIN <= rating <= RATING_MAX)
+
+
 def analyze(reviews: list[ReviewIn], model: SentimentModel) -> list[SentimentResult]:
-    """Есть текст → модель; нет текста, есть оценка → звёзды; нет ничего → skipped."""
+    """Оценка вне 1–5 → skipped; есть текст → модель; нет текста, есть оценка → звёзды;
+    нет ничего → skipped."""
     results: list[SentimentResult | None] = [None] * len(reviews)
     text_indices: list[int] = []
 
     for i, review in enumerate(reviews):
-        if has_text(review):
+        if not has_valid_rating(review):
+            results[i] = SentimentResult(id=review.id, status="skipped", reason="invalid_rating")
+        elif has_text(review):
             text_indices.append(i)
         elif review.rating is not None:
             label = label_from_rating(review.rating)
             results[i] = build_result(review.id, "rating", HARD_PROBS[label])
         else:
-            results[i] = SentimentResult(
-                id=review.id, status="skipped", reason="no_text_no_rating"
-            )
+            results[i] = SentimentResult(id=review.id, status="skipped", reason="no_text_no_rating")
 
     if text_indices:
         # В модель уходит одна пачка с текстами, порядок результатов сохраняется
@@ -216,9 +233,7 @@ app = FastAPI(title="reo ML", version="0.1.0", lifespan=lifespan)
 
 
 @app.exception_handler(StarletteHTTPException)
-async def http_error_handler(
-    request: Request, exc: StarletteHTTPException
-) -> JSONResponse:
+async def http_error_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
     codes = {404: "not_found", 405: "method_not_allowed"}
     code = codes.get(exc.status_code, "http_error")
     message = exc.detail if isinstance(exc.detail, str) else "HTTP-ошибка"
@@ -236,20 +251,15 @@ def health_simple() -> dict[str, str]:
 
 
 @app.exception_handler(RequestValidationError)
-async def validation_error_handler(
-    request: Request, exc: RequestValidationError
-) -> JSONResponse:
+async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
     errors = [
         {"field": ".".join(str(part) for part in e["loc"][1:]), "message": e["msg"]}
         for e in exc.errors()
     ]
     first = errors[0] if errors else {"field": "", "message": "invalid request"}
-    return error_response(
-        422,
-        "invalid_request",
-        f"{first['field']}: {first['message']}",
-        {"errors": errors},
-    )
+    # Ошибка уровня всего тела (например, повтор id) приходит без поля
+    message = f"{first['field']}: {first['message']}" if first["field"] else first["message"]
+    return error_response(422, "invalid_request", message, {"errors": errors})
 
 
 @app.exception_handler(Exception)
@@ -278,6 +288,4 @@ def health(request: Request) -> HealthResponse | JSONResponse:
 @app.post("/v1/sentiment", response_model=SentimentResponse)
 def sentiment(body: SentimentRequest, request: Request) -> SentimentResponse:
     model = get_model(request)
-    return SentimentResponse(
-        model_version=model.version, results=analyze(body.reviews, model)
-    )
+    return SentimentResponse(model_version=model.version, results=analyze(body.reviews, model))

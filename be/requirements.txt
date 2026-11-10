@@ -1,0 +1,11 @@
+# Рантайм
+fastapi==0.162.2
+uvicorn[standard]==0.54.0
+sqlalchemy==2.1.8
+psycopg[binary]==3.3.8
+pydantic-settings==2.16.2
+httpx==0.28.1
+
+# Разработка: тесты и линтер (используются и в CI)
+pytest==9.2.0
+ruff==0.17.4

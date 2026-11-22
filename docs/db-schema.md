@@ -2,7 +2,7 @@
 
 PostgreSQL 16 + pgvector (образ `pgvector/pgvector:pg16`). Модели — `be/app/models/`, миграции — `be/alembic/versions/`.
 
-Состав на E0 (решение 08.11): организация, пользователь, точка и расширение `vector`. Остальные таблицы проектируются в своих эпиках — см. [«Что появится дальше»](#что-появится-дальше).
+Состав после REO-34: организация, пользователь, точка, источники, отчёты CSV-импортов, общая таблица отзывов для CSV и парсера и расширение `vector`. Затронуты Сергей (API), Михаил (сбор данных), Камиль (анализ).
 
 Изменения — только новой миграцией и через PR с пометкой для Сергея, Михаила и Камиля. Влитую миграцию не редактируем.
 
@@ -28,6 +28,10 @@ PostgreSQL 16 + pgvector (образ `pgvector/pgvector:pg16`). Модели —
 erDiagram
     organizations ||--o{ users : "сотрудники"
     organizations ||--o{ points : "точки"
+    points ||--o{ sources : "источники"
+    sources ||--o{ review_imports : "загрузки CSV"
+    sources ||--o{ reviews : "отзывы CSV и парсера"
+    review_imports o|--o{ reviews : "новые отзывы загрузки"
 
     organizations {
         uuid id PK
@@ -52,6 +56,37 @@ erDiagram
         varchar(60) category "NULL"
         timestamptz created_at
         timestamptz updated_at
+    }
+    sources {
+        uuid id PK
+        uuid point_id FK
+        varchar(20) kind "csv или parser"
+        varchar(120) name
+        varchar(60) platform "NULL"
+        text url "NULL"
+        varchar(20) status
+        timestamptz last_collected_at "NULL"
+        text last_error "NULL"
+    }
+    review_imports {
+        uuid id PK
+        uuid source_id FK
+        integer total
+        integer imported
+        integer duplicates
+        integer rejected
+        jsonb errors
+    }
+    reviews {
+        uuid id PK
+        uuid source_id FK
+        uuid import_id FK "NULL у парсера"
+        date date
+        text text "NULL у парсера"
+        float rating "NULL"
+        varchar(255) external_id "NULL"
+        text url "NULL"
+        varchar(64) dedup_key
     }
 ```
 
@@ -93,6 +128,50 @@ erDiagram
 
 Уникальности нет: одинаковый адрес допустим, совпадение названия и адреса — только предупреждение в интерфейсе.
 
+### `sources` — источник отзывов
+
+| Колонка | Тип | NULL | Описание |
+|---|---|---|---|
+| `point_id` | `uuid` | нет | FK → `points.id`, CASCADE, индекс |
+| `kind` | `varchar(20)` | нет | CHECK: `csv` или `parser` |
+| `name` | `varchar(120)` | нет | Для CSV — «Импорт CSV», для парсера — название подключения |
+| `platform` | `varchar(60)` | да | Площадка парсера; CSV — `null` |
+| `url` | `text` | да | Страница точки на площадке; CSV — `null` |
+| `status` | `varchar(20)` | нет | `checking`, `collecting`, `ok`, `error`, `paused`; по умолчанию `ok` |
+| `last_collected_at` | `timestamptz` | да | Время последнего получения новых отзывов |
+| `last_error` | `text` | да | Последняя ошибка подключения |
+
+Частичный уникальный индекс `uq_sources_csv_point` на `point_id WHERE kind = 'csv'` гарантирует один CSV-источник точки, в том числе при одновременных загрузках. Парсерных источников может быть несколько. Обновление API точек для расчёта `sources_count` и `data_status` остаётся за потребителем схемы (Сергей); в текущем каркасе публичный API точек ещё отсутствует.
+
+### `review_imports` — отчёт CSV-импорта
+
+| Колонка | Тип | NULL | Описание |
+|---|---|---|---|
+| `source_id` | `uuid` | нет | FK → `sources.id`, CASCADE, индекс |
+| `total`, `imported`, `duplicates`, `rejected` | `integer` | нет | Счётчики ответа API, CHECK: неотрицательные и `total = imported + duplicates + rejected` |
+| `errors` | `jsonb` | нет | Массив ошибок `{row, field, code, message}`, включая ошибки полностью отклонённой загрузки |
+
+`id` этой записи возвращается как `import_id`. Каждый структурно корректный файл создаёт новый отчёт, даже при нуле новых отзывов. Сырые файлы и имена авторов не сохраняются. Уникальная пара `(id, source_id)` служит целью составного FK из `reviews`.
+
+### `reviews` — общая таблица отзывов CSV и парсера
+
+| Колонка | Тип | NULL | Описание |
+|---|---|---|---|
+| `source_id` | `uuid` | нет | FK → `sources.id`, CASCADE, индекс; точка определяется через источник |
+| `import_id` | `uuid` | да | Индекс; составной FK `(import_id, source_id)` → `review_imports(id, source_id)`, CASCADE: импорт и отзыв обязательно принадлежат одному источнику |
+| `date` | `date` | нет | День публикации по Europe/Moscow |
+| `text` | `text` | да | CSV требует непустой текст; парсер может получить только оценку |
+| `rating` | `double precision` | да | CHECK: 1–5 включительно; пустая оценка — `null` |
+| `external_id` | `varchar(255)` | да | Идентификатор отзыва площадки; CSV — `null` |
+| `url` | `text` | да | Ссылка на оригинал; CSV — `null` |
+| `dedup_key` | `varchar(64)` | нет | SHA-256 ключа идентичности в источнике |
+
+Уникальность `(source_id, dedup_key)` исключает дубли на уровне БД. Для CSV ключ — SHA-256 от JSON-массива `[date в ISO, нормализованный text, rating как float либо null]` (`ensure_ascii=False`, `separators=(",", ":")`, UTF-8). Для парсера при наличии внешнего ID следует хешировать `["external_id", external_id]`, иначе использовать такой же ключ по полям. Два разных источника не дедуплицируются между собой. Авторов и контакты не храним.
+
+CSV сохраняет `import_id` только у новых отзывов, парсер — `null`. Повторный импорт не переносит существующий отзыв в новую загрузку. Отчёт, новые отзывы и источник фиксируются одной транзакцией; ошибка сохранения не оставляет частичного результата. Удаление точки каскадно удаляет источник, отчёты импортов и отзывы.
+
+Изоляция: `sources`, `review_imports`, `reviews` получают организацию через `sources.point_id → points.organization_id`. Чтение по `import_id` сначала проверяет импорт через JOIN с источником и точкой текущей организации; отсутствующий и чужой импорт дают одинаковый 404. Для анализа используются строго отзывы с этим `reviews.import_id`, а не все отзывы источника.
+
 ## 4. Расширения
 
 | Расширение | Зачем | Где создаётся |
@@ -105,7 +184,7 @@ erDiagram
 
 | Эпик | Таблицы | Автор |
 |---|---|---|
-| E2 (REO-8) | Источники, отзывы, задачи сбора и импорта. Отзыв связан с точкой и источником; FK на `points` с `ON DELETE CASCADE` | Михаил |
+| E2 (REO-8), после REO-34 | Парсер, управление источниками, фоновые задачи сбора. Источники, отзывы и отчёты CSV-импортов уже добавлены | Михаил |
 | E3 (REO-9) | Результаты анализа тональности, агрегаты по (точка, источник, день) | Камиль |
 | E6 | Эмбеддинги (`vector`) и группы проблем клиентов | Артём, Камиль |
 | E10 | `users.password_hash` для входа по логину и паролю | Сергей |

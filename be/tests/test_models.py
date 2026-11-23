@@ -15,6 +15,7 @@ def test_tables_exist() -> None:
         "points",
         "sources",
         "review_imports",
+        "review_sentiments",
         "reviews",
     }
 
@@ -22,8 +23,15 @@ def test_tables_exist() -> None:
 @pytest.mark.parametrize("name", list(TABLES))
 def test_common_columns(name: str) -> None:
     table = TABLES[name]
-    assert [column.name for column in table.primary_key] == ["id"]
-    assert str(table.c.id.server_default.arg) == "gen_random_uuid()"
+    (key,) = table.primary_key.columns
+    if name == "review_sentiments":
+        assert key.name == "review_id"
+        (fk,) = key.foreign_keys
+        assert fk.target_fullname == "reviews.id"
+        assert fk.ondelete == "CASCADE"
+    else:
+        assert key.name == "id"
+        assert str(key.server_default.arg) == "gen_random_uuid()"
     for column in ("created_at", "updated_at"):
         assert table.c[column].type.timezone is True
         assert table.c[column].nullable is False

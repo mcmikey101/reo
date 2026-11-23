@@ -1,11 +1,13 @@
 """Загрузка через API, реальные ограничения PostgreSQL и выборка по import_id."""
 
+import json
 import uuid
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from threading import Barrier
 
+import httpx
 import pytest
 from alembic import command
 from alembic.config import Config
@@ -14,16 +16,18 @@ from sqlalchemy import Engine, create_engine, delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.clients import ml
 from app.db import get_db
 from app.deps import get_current_user
 from app.errors import NotFoundError
 from app.main import create_app
-from app.models import Organization, Point, Review, ReviewImport, Source, User
+from app.models import Organization, Point, Review, ReviewImport, ReviewSentiment, Source, User
 from app.scope import OrgScope
 from app.seed import DEMO_ORG_ID, OTHER_ORG_ID, OTHER_USER_ID, POINTS, seed
 from app.services.csv_parser import MAX_CSV_BYTES, parse_csv
 from app.services.imports import get_import_reviews, import_csv
 from app.services.points import delete_point
+from app.services.sentiment import ImportSentimentSummary, analyze_import
 
 OWN_POINTS = [p["id"] for p in POINTS if p["organization_id"] == DEMO_ORG_ID]
 OWN_POINT = OWN_POINTS[0]
@@ -79,6 +83,106 @@ def counts(db: Session) -> tuple[int, ...]:
         db.scalar(select(func.count()).select_from(model))
         for model in (Source, ReviewImport, Review)
     )
+
+
+def test_sentiment_batches_retry_errors_only(api: TestClient, db: Session, monkeypatch) -> None:
+    csv = "date,text,rating\n" + "".join(f"2026-11-20,Отзыв {i},5\n" for i in range(257))
+    selected = upload(api, csv.encode()).json()
+    other = upload(api).json()
+    assert selected["source_id"] == other["source_id"]
+    import_id = uuid.UUID(selected["import_id"])
+    scope = OrgScope(db, DEMO_ORG_ID)
+    requests = []
+    delays = []
+    monkeypatch.setattr(ml, "sleep", delays.append)
+
+    def respond(request):
+        reviews = json.loads(request.content)["reviews"]
+        requests.append(reviews)
+        if len(requests) <= 4:
+            return httpx.Response(503)
+        return httpx.Response(
+            200,
+            json={
+                "model_version": "test-model@123",
+                "results": [
+                    {
+                        "id": review["id"],
+                        "status": "ok",
+                        "reason": None,
+                        "method": "model",
+                        "label": "positive",
+                        "probs": {"pos": 0.8, "neu": 0.1, "neg": 0.1},
+                        "score": 0.7,
+                    }
+                    for review in reversed(reviews)
+                ],
+            },
+        )
+
+    with httpx.Client(
+        base_url="http://ml:8001", transport=httpx.MockTransport(respond)
+    ) as ml_client:
+        assert analyze_import(scope, import_id, ml_client) == ImportSentimentSummary(1, 0, 256)
+        with db.begin():
+            errors = db.scalars(
+                select(ReviewSentiment).where(ReviewSentiment.status == "error")
+            ).all()
+            assert len(errors) == 256
+            assert all(row.reason == "ml_http_503" and row.model_version is None for row in errors)
+            completed = db.scalars(
+                select(ReviewSentiment).where(ReviewSentiment.status == "done")
+            ).one()
+            completed_at = completed.analyzed_at
+
+        assert delays == [1, 4, 16]
+        assert [len(batch) for batch in requests] == [256, 256, 256, 256, 1]
+        assert all(batch == requests[0] for batch in requests[:4])
+        assert analyze_import(scope, import_id, ml_client) == ImportSentimentSummary(257, 0, 0)
+        assert requests[-1] == requests[0]
+        assert analyze_import(scope, import_id, ml_client) == ImportSentimentSummary(257, 0, 0)
+        assert len(requests) == 6
+
+    with db.begin():
+        results = db.execute(
+            select(ReviewSentiment, Review.import_id)
+            .join(Review)
+            .execution_options(populate_existing=True)
+        ).all()
+        assert len(results) == 257
+        for row, owner_import_id in results:
+            assert owner_import_id == import_id
+            assert (row.status, row.method, row.label, row.reason) == (
+                "done",
+                "model",
+                "positive",
+                None,
+            )
+            assert (row.p_pos, row.p_neu, row.p_neg, row.score) == (0.8, 0.1, 0.1, 0.7)
+            assert row.model_version == "test-model@123"
+            assert row.analyzed_at is not None
+            if str(row.review_id) == requests[4][0]["id"]:
+                assert row.analyzed_at == completed_at
+
+    delete_point(scope, OWN_POINT)
+    assert db.scalar(select(func.count()).select_from(ReviewSentiment)) == 0
+
+
+def test_sentiment_empty_or_inaccessible_import_never_calls_ml(
+    api: TestClient, db: Session
+) -> None:
+    empty = uuid.UUID(upload(api, b"date,text,rating\n").json()["import_id"])
+    foreign = import_csv(OrgScope(db, OTHER_ORG_ID), OTHER_POINT, VALID_CSV).import_id
+    scope = OrgScope(db, DEMO_ORG_ID)
+
+    def fail(_):
+        pytest.fail("Не должно быть вызова ML")
+
+    with httpx.Client(base_url="http://ml:8001", transport=httpx.MockTransport(fail)) as client:
+        assert analyze_import(scope, empty, client) == ImportSentimentSummary(0, 0, 0)
+        for import_id in (foreign, uuid.uuid4()):
+            with pytest.raises(NotFoundError, match="Импорт не найден"):
+                analyze_import(scope, import_id, client)
 
 
 def test_partial_import_and_saved_report(api: TestClient, db: Session) -> None:
@@ -379,6 +483,70 @@ def test_import_handles_point_deleted_during_csv_parsing(
     with Session(engine, autoflush=False) as session:
         with pytest.raises(NotFoundError, match="Точка не найдена"):
             import_csv(OrgScope(session, organization_id), point_id, VALID_CSV)
+
+
+def test_late_ml_error_cannot_overwrite_a_saved_result(
+    engine: Engine, committed_point: tuple[uuid.UUID, uuid.UUID]
+) -> None:
+    organization_id, point_id = committed_point
+    with Session(engine) as session:
+        report = import_csv(OrgScope(session, organization_id), point_id, VALID_CSV)
+        review = session.scalars(
+            select(Review).where(Review.import_id == report.import_id, Review.rating.is_(None))
+        ).one()
+        review.text = None
+        session.commit()
+
+    def success(request):
+        results = []
+        for review in reversed(json.loads(request.content)["reviews"]):
+            has_text = review["text"] is not None
+            results.append(
+                {
+                    "id": review["id"],
+                    "status": "ok" if has_text else "skipped",
+                    "reason": None if has_text else "no_text_no_rating",
+                    "method": "model" if has_text else None,
+                    "label": "positive" if has_text else None,
+                    "probs": {"pos": 1, "neu": 0, "neg": 0} if has_text else None,
+                    "score": 1 if has_text else None,
+                }
+            )
+        return httpx.Response(200, json={"model_version": "test-model", "results": results})
+
+    def late_failure(_):
+        # Второй запуск успевает сохранить совпадающую пачку, пока первый ждёт ML.
+        with (
+            Session(engine) as session,
+            httpx.Client(
+                base_url="http://ml:8001", transport=httpx.MockTransport(success)
+            ) as client,
+        ):
+            scope = OrgScope(session, organization_id)
+            assert analyze_import(scope, report.import_id, client) == ImportSentimentSummary(
+                1, 1, 0
+            )
+        return httpx.Response(422)
+
+    with (
+        Session(engine) as session,
+        httpx.Client(
+            base_url="http://ml:8001", transport=httpx.MockTransport(late_failure)
+        ) as client,
+    ):
+        scope = OrgScope(session, organization_id)
+        assert analyze_import(scope, report.import_id, client) == ImportSentimentSummary(1, 1, 0)
+        saved = session.execute(
+            select(
+                Review.text, ReviewSentiment.status, ReviewSentiment.reason, ReviewSentiment.score
+            )
+            .join(ReviewSentiment)
+            .where(Review.import_id == report.import_id)
+        ).all()
+        assert set(saved) == {
+            ("Вкусный кофе", "done", None, 1.0),
+            (None, "skipped", "no_text_no_rating", None),
+        }
 
 
 def test_concurrent_imports_create_one_source_and_no_duplicates(

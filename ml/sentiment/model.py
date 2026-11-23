@@ -91,8 +91,7 @@ class HuggingFaceSentimentModel:
         self._device = config.device
 
         id2label = {
-            int(index): str(label).lower()
-            for index, label in self._model.config.id2label.items()
+            int(index): str(label).lower() for index, label in self._model.config.id2label.items()
         }
         if set(id2label.values()) != _REQUIRED_LABELS:
             raise ValueError(
@@ -102,9 +101,7 @@ class HuggingFaceSentimentModel:
         self._label_indices = {label: index for index, label in id2label.items()}
 
     @classmethod
-    def from_pretrained(
-        cls, config_path: Path = _DEFAULT_CONFIG
-    ) -> HuggingFaceSentimentModel:
+    def from_pretrained(cls, config_path: Path = _DEFAULT_CONFIG) -> HuggingFaceSentimentModel:
         """Загружает модель и токенизатор по настройкам из config.yaml."""
         from transformers import AutoModelForSequenceClassification, AutoTokenizer
 

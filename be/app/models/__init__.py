@@ -6,6 +6,9 @@
 from app.models.base import Base
 from app.models.organization import Organization
 from app.models.point import Point
+from app.models.review import Review
+from app.models.review_import import ReviewImport
+from app.models.source import Source
 from app.models.user import User
 
-__all__ = ["Base", "Organization", "Point", "User"]
+__all__ = ["Base", "Organization", "Point", "Review", "ReviewImport", "Source", "User"]

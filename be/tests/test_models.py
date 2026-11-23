@@ -8,11 +8,18 @@ from app.models import Base
 TABLES = Base.metadata.tables
 
 
-def test_e0_tables_exist() -> None:
-    assert set(TABLES) == {"organizations", "users", "points"}
+def test_tables_exist() -> None:
+    assert set(TABLES) == {
+        "organizations",
+        "users",
+        "points",
+        "sources",
+        "review_imports",
+        "reviews",
+    }
 
 
-@pytest.mark.parametrize("name", ["organizations", "users", "points"])
+@pytest.mark.parametrize("name", list(TABLES))
 def test_common_columns(name: str) -> None:
     table = TABLES[name]
     assert [column.name for column in table.primary_key] == ["id"]

@@ -36,7 +36,7 @@ def test_vector_extension_installed(engine: Engine) -> None:
 
 def test_tables_created(engine: Engine) -> None:
     tables = set(inspect(engine).get_table_names())
-    assert {"organizations", "users", "points", "alembic_version"} <= tables
+    assert set(Base.metadata.tables) | {"alembic_version"} == tables
 
 
 def test_models_match_migrations(engine: Engine) -> None:
@@ -81,4 +81,37 @@ def test_downgrade_and_upgrade_again(engine: Engine, alembic_config: Config) -> 
     command.downgrade(alembic_config, "base")
     assert set(inspect(engine).get_table_names()) <= {"alembic_version"}
     command.upgrade(alembic_config, "head")
-    assert {"organizations", "users", "points"} <= set(inspect(engine).get_table_names())
+    assert set(Base.metadata.tables) | {"alembic_version"} == set(inspect(engine).get_table_names())
+
+
+def test_csv_migration_roundtrip_preserves_existing_points(engine, alembic_config):
+    with engine.begin() as connection:
+        org_id = connection.scalar(
+            text("INSERT INTO organizations (name) VALUES ('До CSV-импорта') RETURNING id")
+        )
+        point_id = connection.scalar(
+            text(
+                "INSERT INTO points (organization_id, name, address) "
+                "VALUES (:org, 'Точка', 'Адрес') RETURNING id"
+            ),
+            {"org": org_id},
+        )
+    try:
+        command.downgrade(alembic_config, "d638154a4752")
+        assert set(inspect(engine).get_table_names()) == {
+            "alembic_version",
+            "organizations",
+            "users",
+            "points",
+        }
+        with engine.connect() as connection:
+            assert (
+                connection.scalar(text("SELECT id FROM points WHERE id = :id"), {"id": point_id})
+                == point_id
+            )
+        command.upgrade(alembic_config, "head")
+        test_models_match_migrations(engine)
+    finally:
+        command.upgrade(alembic_config, "head")
+        with engine.begin() as connection:
+            connection.execute(text("DELETE FROM organizations WHERE id = :id"), {"id": org_id})

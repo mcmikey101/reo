@@ -11,13 +11,15 @@ import logging
 import math
 from collections import Counter
 from contextlib import asynccontextmanager
-from typing import Any, ClassVar, Literal, Protocol
+from typing import Any, Literal, Protocol
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
+
+from sentiment.model import HuggingFaceSentimentModel, Probabilities
 
 logger = logging.getLogger("reo_ml")
 
@@ -110,11 +112,13 @@ def error_response(http_status: int, code: str, message: str, details: Any = Non
 
 
 class SentimentModel(Protocol):
-    """Интерфейс модели: получает только отзывы с текстом, возвращает вероятности."""
+    """Интерфейс модели: принимает тексты и возвращает вероятности классов."""
 
     version: str
 
-    def predict(self, reviews: list[ReviewIn]) -> list[Probs]: ...
+    mock: bool
+
+    def predict(self, texts: list[str]) -> list[Probabilities]: ...
 
 
 def label_from_rating(rating: float) -> Label:
@@ -131,28 +135,6 @@ HARD_PROBS: dict[Label, Probs] = {
     "neutral": Probs(pos=0.0, neu=1.0, neg=0.0),
     "negative": Probs(pos=0.0, neu=0.0, neg=1.0),
 }
-
-
-class MockSentiment:
-    """Заглушка модели: детерминированный ответ по звёздам.
-
-    «Мягкие» вероятности нужны, чтобы ответ был похож на ответ настоящей модели.
-    Отзыв с текстом, но без оценки, считается нейтральным.
-    """
-
-    version = "mock-0.1"
-
-    _SOFT: ClassVar[dict[Label, Probs]] = {
-        "positive": Probs(pos=0.80, neu=0.15, neg=0.05),
-        "neutral": Probs(pos=0.20, neu=0.60, neg=0.20),
-        "negative": Probs(pos=0.05, neu=0.15, neg=0.80),
-    }
-
-    def predict(self, reviews: list[ReviewIn]) -> list[Probs]:
-        return [
-            self._SOFT[label_from_rating(r.rating) if r.rating is not None else "neutral"]
-            for r in reviews
-        ]
 
 
 # ---------------------------------------------------------------------------
@@ -207,9 +189,10 @@ def analyze(reviews: list[ReviewIn], model: SentimentModel) -> list[SentimentRes
 
     if text_indices:
         # В модель уходит одна пачка с текстами, порядок результатов сохраняется
-        probs = model.predict([reviews[i] for i in text_indices])
-        for i, p in zip(text_indices, probs, strict=True):
-            results[i] = build_result(reviews[i].id, "model", p)
+        probabilities = model.predict([reviews[i].text or "" for i in text_indices])
+        for i, p in zip(text_indices, probabilities, strict=True):
+            probs = Probs(pos=p.pos, neu=p.neu, neg=p.neg)
+            results[i] = build_result(reviews[i].id, "model", probs)
 
     return [r for r in results if r is not None]
 
@@ -221,15 +204,18 @@ def analyze(reviews: list[ReviewIn], model: SentimentModel) -> list[SentimentRes
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Здесь позже: compose конфиг Hydra и app.state.sentiment = instantiate(cfg.sentiment)
-    app.state.sentiment = MockSentiment()
-    app.state.mock = True
+    app.state.sentiment = load_sentiment_model()
+    app.state.mock = getattr(app.state.sentiment, "mock", False)
     logger.info("Модель тональности загружена: %s", app.state.sentiment.version)
     yield
     app.state.sentiment = None
 
 
 app = FastAPI(title="reo ML", version="0.1.0", lifespan=lifespan)
+
+
+def load_sentiment_model() -> SentimentModel:
+    return HuggingFaceSentimentModel.from_pretrained()
 
 
 @app.exception_handler(StarletteHTTPException)

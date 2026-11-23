@@ -16,13 +16,23 @@ INSERT_BATCH_SIZE = 500
 
 
 def import_csv(scope: OrgScope, point_id: UUID, content: bytes) -> CsvImportResult:
-    point = scope.get(Point, point_id, message="Точка не найдена")
+    scope.get(Point, point_id, message="Точка не найдена")
     parsed = parse_csv(content)
     try:
+        # Пока разбирался CSV, точку могли удалить. Повторная проверка удерживает её до commit.
+        locked_point_id = scope.db.scalar(
+            scope.select(Point)
+            .with_only_columns(Point.id)
+            .where(Point.id == point_id)
+            .with_for_update(read=True, key_share=True, of=Point)
+        )
+        if locked_point_id is None:
+            raise NotFoundError("Точка не найдена")
+
         # Уникальность источника и отзывов обеспечивает PostgreSQL, включая гонки запросов.
         scope.db.execute(
             insert(Source)
-            .values(point_id=point.id, kind="csv", name="Импорт CSV")
+            .values(point_id=point_id, kind="csv", name="Импорт CSV")
             .on_conflict_do_nothing(
                 index_elements=[Source.point_id],
                 # Общему плану нужен литерал для сопоставления с частичным индексом.
@@ -30,7 +40,7 @@ def import_csv(scope: OrgScope, point_id: UUID, content: bytes) -> CsvImportResu
             )
         )
         source = scope.db.scalars(
-            select(Source).where(Source.point_id == point.id, Source.kind == "csv")
+            select(Source).where(Source.point_id == point_id, Source.kind == "csv")
         ).one()
         report = ReviewImport(
             source_id=source.id,
@@ -70,7 +80,7 @@ def import_csv(scope: OrgScope, point_id: UUID, content: bytes) -> CsvImportResu
             source.last_collected_at = datetime.now(UTC)
         result = CsvImportResult(
             import_id=report.id,
-            point_id=point.id,
+            point_id=point_id,
             source_id=source.id,
             total=report.total,
             imported=report.imported,

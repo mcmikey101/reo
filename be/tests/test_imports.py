@@ -21,8 +21,9 @@ from app.main import create_app
 from app.models import Organization, Point, Review, ReviewImport, Source, User
 from app.scope import OrgScope
 from app.seed import DEMO_ORG_ID, OTHER_ORG_ID, OTHER_USER_ID, POINTS, seed
-from app.services.csv_parser import MAX_CSV_BYTES
+from app.services.csv_parser import MAX_CSV_BYTES, parse_csv
 from app.services.imports import get_import_reviews, import_csv
+from app.services.points import delete_point
 
 OWN_POINTS = [p["id"] for p in POINTS if p["organization_id"] == DEMO_ORG_ID]
 OWN_POINT = OWN_POINTS[0]
@@ -288,11 +289,30 @@ def test_save_failure_rolls_back_entire_import(db: Session, monkeypatch) -> None
 
 
 def test_point_deletion_cascades_to_source_import_and_reviews(api, db):
-    upload(api)
-    db.execute(delete(Point).where(Point.id == OWN_POINT))
-    db.flush()
+    assert upload(api).status_code == 201
+    url = f"/points/{OWN_POINT}"
+    point = api.get(url).json()
+    assert (point["sources_count"], point["data_status"]) == (1, "ok")
 
+    response = api.delete(url)
+    assert response.status_code == 204 and not response.content
     assert counts(db) == (0, 0, 0)
+    assert api.delete(url).status_code == 404
+
+
+def test_point_rolls_up_source_statuses_in_list(api, db):
+    assert upload(api).status_code == 201
+    sources = [
+        Source(point_id=OWN_POINT, kind="parser", name=status, status=status)
+        for status in ("paused", "checking", "error")
+    ]
+    for source, expected in zip(sources, ("ok", "collecting", "error"), strict=True):
+        db.add(source)
+        db.flush()
+        points = api.get("/points").json()["items"]
+        point = next(point for point in points if point["id"] == str(OWN_POINT))
+        assert point["data_status"] == expected
+    assert point["sources_count"] == 4
 
 
 def test_parser_reviews_share_schema_and_allow_no_text(api, db):
@@ -326,8 +346,8 @@ def test_database_rejects_import_from_another_source(api, db):
     db.rollback()
 
 
-def test_concurrent_imports_create_one_source_and_no_duplicates(engine: Engine) -> None:
-    # Отдельные соединения требуют зафиксированной точки вне транзакционной фикстуры db.
+@pytest.fixture
+def committed_point(engine: Engine) -> Iterator[tuple[uuid.UUID, uuid.UUID]]:
     with Session(engine, expire_on_commit=False) as session:
         organization = Organization(name="Проверка параллельного импорта")
         session.add(organization)
@@ -336,28 +356,47 @@ def test_concurrent_imports_create_one_source_and_no_duplicates(engine: Engine) 
         session.add(point)
         session.commit()
 
+    try:
+        yield organization.id, point.id
+    finally:
+        with Session(engine) as session:
+            session.execute(delete(Organization).where(Organization.id == organization.id))
+            session.commit()
+
+
+def test_import_handles_point_deleted_during_csv_parsing(
+    engine: Engine, committed_point: tuple[uuid.UUID, uuid.UUID], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    organization_id, point_id = committed_point
+
+    def parse_and_delete(content: bytes):
+        parsed = parse_csv(content)
+        with Session(engine) as session:
+            delete_point(OrgScope(session, organization_id), point_id)
+        return parsed
+
+    monkeypatch.setattr("app.services.imports.parse_csv", parse_and_delete)
+    with Session(engine, autoflush=False) as session:
+        with pytest.raises(NotFoundError, match="Точка не найдена"):
+            import_csv(OrgScope(session, organization_id), point_id, VALID_CSV)
+
+
+def test_concurrent_imports_create_one_source_and_no_duplicates(
+    engine: Engine, committed_point: tuple[uuid.UUID, uuid.UUID]
+) -> None:
+    organization_id, point_id = committed_point
     barrier = Barrier(2)
 
     def load():
         with Session(engine, autoflush=False, expire_on_commit=False) as session:
             barrier.wait(timeout=10)
-            return import_csv(OrgScope(session, organization.id), point.id, VALID_CSV)
+            return import_csv(OrgScope(session, organization_id), point_id, VALID_CSV)
 
-    try:
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            results = list(executor.map(lambda _: load(), range(2)))
-        assert len({r.source_id for r in results}) == 1
-        assert sorted((r.imported, r.duplicates) for r in results) == [(0, 2), (2, 0)]
-        with Session(engine) as session:
-            assert (
-                len(get_import_reviews(OrgScope(session, organization.id), results[0].import_id))
-                == results[0].imported
-            )
-            assert (
-                len(get_import_reviews(OrgScope(session, organization.id), results[1].import_id))
-                == results[1].imported
-            )
-    finally:
-        with Session(engine) as session:
-            session.execute(delete(Organization).where(Organization.id == organization.id))
-            session.commit()
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _: load(), range(2)))
+    assert len({r.source_id for r in results}) == 1
+    assert sorted((r.imported, r.duplicates) for r in results) == [(0, 2), (2, 0)]
+    with Session(engine) as session:
+        scope = OrgScope(session, organization_id)
+        for result in results:
+            assert len(get_import_reviews(scope, result.import_id)) == result.imported

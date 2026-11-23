@@ -34,6 +34,12 @@ class NotFoundError(AppError):
     message = "Запись не найдена"
 
 
+class PossibleDuplicateError(AppError):
+    status_code = 409
+    code = "possible_duplicate"
+    message = "Точка с таким названием и адресом уже есть"
+
+
 def error_body(code: str, message: str, details: dict[str, Any] | None = None) -> dict[str, Any]:
     return {"error": {"code": code, "message": message, "details": details}}
 
@@ -75,6 +81,8 @@ async def handle_validation_error(_: Request, exc: RequestValidationError) -> JS
         field = ".".join(str(part) for part in error["loc"][1:])
         if kind == "missing":
             code, message = "required", "Обязательное поле"
+        elif kind == "blank":
+            code, message = kind, error["msg"]
         elif kind == "extra_forbidden":
             code, message = "unknown_field", "Неизвестное поле"
         elif kind in {"string_too_long", "too_long"}:

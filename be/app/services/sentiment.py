@@ -11,6 +11,7 @@ from sqlalchemy.dialects.postgresql import insert
 
 from app.clients.ml import (
     SENTIMENT_BATCH_SIZE,
+    SENTIMENT_PADDED_TEXT_BUDGET,
     SENTIMENT_TEXT_LIMIT,
     SentimentError,
     SentimentResponse,
@@ -41,15 +42,26 @@ def analyze_import(
         _require_import(scope, import_id)
 
     after: UUID | None = None
+    batch_size = SENTIMENT_BATCH_SIZE
     while True:
         with scope.db.begin():
-            batch = _next_batch(scope, import_id, after)
+            batch = _next_batch(scope, import_id, after, batch_size)
         if not batch:
             break
         # ML и паузы между попытками не держат соединение или блокировки БД.
         try:
             rows = _result_rows(get_sentiment(client, batch))
         except SentimentError as exc:
+            if exc.split_batch:
+                batch_size = len(batch) // 2
+                logger.info(
+                    "Импорт %s: ML (%s), уменьшаем пачку с %s до %s отзывов",
+                    import_id,
+                    exc.code,
+                    len(batch),
+                    batch_size,
+                )
+                continue
             logger.warning(
                 "Импорт %s: ошибка ML (%s), отзывов в пачке: %s", import_id, exc.code, len(batch)
             )
@@ -86,7 +98,9 @@ def _require_import(scope: OrgScope, import_id: UUID, *, lock: bool = False) -> 
         raise NotFoundError("Импорт не найден")
 
 
-def _next_batch(scope: OrgScope, import_id: UUID, after: UUID | None) -> list[SentimentReview]:
+def _next_batch(
+    scope: OrgScope, import_id: UUID, after: UUID | None, batch_size: int
+) -> list[SentimentReview]:
     statement = (
         select(Review.id, func.left(Review.text, SENTIMENT_TEXT_LIMIT), Review.rating)
         .outerjoin(ReviewSentiment, ReviewSentiment.review_id == Review.id)
@@ -95,11 +109,21 @@ def _next_batch(scope: OrgScope, import_id: UUID, after: UUID | None) -> list[Se
             or_(ReviewSentiment.review_id.is_(None), ReviewSentiment.status == "error"),
         )
         .order_by(Review.id)
-        .limit(SENTIMENT_BATCH_SIZE)
+        .limit(batch_size)
     )
     if after is not None:
         statement = statement.where(Review.id > after)
-    return [SentimentReview(*row) for row in scope.db.execute(statement)]
+
+    batch: list[SentimentReview] = []
+    longest_text = 0
+    for row in scope.db.execute(statement).all():
+        review = SentimentReview(*row)
+        longest_text = max(longest_text, len(review.text or ""))
+        # Длинный отзыв не должен увеличивать объём инференса всей пачки.
+        if batch and longest_text * (len(batch) + 1) > SENTIMENT_PADDED_TEXT_BUDGET:
+            break
+        batch.append(review)
+    return batch
 
 
 def _result_rows(response: SentimentResponse) -> list[ResultRow]:

@@ -85,8 +85,30 @@ def counts(db: Session) -> tuple[int, ...]:
     )
 
 
+def sentiment_success(reviews):
+    return httpx.Response(
+        200,
+        json={
+            "model_version": "test-model@123",
+            "results": [
+                {
+                    "id": review["id"],
+                    "status": "ok",
+                    "reason": None,
+                    "method": "model",
+                    "label": "positive",
+                    "probs": {"pos": 0.8, "neu": 0.1, "neg": 0.1},
+                    "score": 0.7,
+                }
+                for review in reversed(reviews)
+            ],
+        },
+    )
+
+
 def test_sentiment_batches_retry_errors_only(api: TestClient, db: Session, monkeypatch) -> None:
-    csv = "date,text,rating\n" + "".join(f"2026-11-20,Отзыв {i},5\n" for i in range(257))
+    size = ml.SENTIMENT_BATCH_SIZE
+    csv = "date,text,rating\n" + "".join(f"2026-11-20,Отзыв {i},5\n" for i in range(size + 1))
     selected = upload(api, csv.encode()).json()
     other = upload(api).json()
     assert selected["source_id"] == other["source_id"]
@@ -101,34 +123,17 @@ def test_sentiment_batches_retry_errors_only(api: TestClient, db: Session, monke
         requests.append(reviews)
         if len(requests) <= 4:
             return httpx.Response(503)
-        return httpx.Response(
-            200,
-            json={
-                "model_version": "test-model@123",
-                "results": [
-                    {
-                        "id": review["id"],
-                        "status": "ok",
-                        "reason": None,
-                        "method": "model",
-                        "label": "positive",
-                        "probs": {"pos": 0.8, "neu": 0.1, "neg": 0.1},
-                        "score": 0.7,
-                    }
-                    for review in reversed(reviews)
-                ],
-            },
-        )
+        return sentiment_success(reviews)
 
     with httpx.Client(
         base_url="http://ml:8001", transport=httpx.MockTransport(respond)
     ) as ml_client:
-        assert analyze_import(scope, import_id, ml_client) == ImportSentimentSummary(1, 0, 256)
+        assert analyze_import(scope, import_id, ml_client) == ImportSentimentSummary(1, 0, size)
         with db.begin():
             errors = db.scalars(
                 select(ReviewSentiment).where(ReviewSentiment.status == "error")
             ).all()
-            assert len(errors) == 256
+            assert len(errors) == size
             assert all(row.reason == "ml_http_503" and row.model_version is None for row in errors)
             completed = db.scalars(
                 select(ReviewSentiment).where(ReviewSentiment.status == "done")
@@ -136,11 +141,11 @@ def test_sentiment_batches_retry_errors_only(api: TestClient, db: Session, monke
             completed_at = completed.analyzed_at
 
         assert delays == [1, 4, 16]
-        assert [len(batch) for batch in requests] == [256, 256, 256, 256, 1]
+        assert [len(batch) for batch in requests] == [size, size, size, size, 1]
         assert all(batch == requests[0] for batch in requests[:4])
-        assert analyze_import(scope, import_id, ml_client) == ImportSentimentSummary(257, 0, 0)
+        assert analyze_import(scope, import_id, ml_client) == ImportSentimentSummary(size + 1, 0, 0)
         assert requests[-1] == requests[0]
-        assert analyze_import(scope, import_id, ml_client) == ImportSentimentSummary(257, 0, 0)
+        assert analyze_import(scope, import_id, ml_client) == ImportSentimentSummary(size + 1, 0, 0)
         assert len(requests) == 6
 
     with db.begin():
@@ -149,7 +154,7 @@ def test_sentiment_batches_retry_errors_only(api: TestClient, db: Session, monke
             .join(Review)
             .execution_options(populate_existing=True)
         ).all()
-        assert len(results) == 257
+        assert len(results) == size + 1
         for row, owner_import_id in results:
             assert owner_import_id == import_id
             assert (row.status, row.method, row.label, row.reason) == (
@@ -166,6 +171,66 @@ def test_sentiment_batches_retry_errors_only(api: TestClient, db: Session, monke
 
     delete_point(scope, OWN_POINT)
     assert db.scalar(select(func.count()).select_from(ReviewSentiment)) == 0
+
+
+@pytest.mark.parametrize("status", [None, 413, 504], ids=["read-timeout", "http-413", "http-504"])
+def test_sentiment_smaller_batches_recover_entire_import(
+    api: TestClient, db: Session, monkeypatch, status: int | None
+) -> None:
+    csv = "date,text,rating\n" + "".join(f"2026-11-20,Отзыв {i},5\n" for i in range(33))
+    import_id = uuid.UUID(upload(api, csv.encode()).json()["import_id"])
+    scope = OrgScope(db, DEMO_ORG_ID)
+    sizes = []
+    processed_ids = []
+    monkeypatch.setattr(ml, "sleep", lambda _: pytest.fail("Повтор той же пачки"))
+
+    def respond(request):
+        reviews = json.loads(request.content)["reviews"]
+        sizes.append(len(reviews))
+        if len(reviews) > 8:
+            if status is None:
+                raise httpx.ReadTimeout("ML не успел обработать пачку", request=request)
+            return httpx.Response(status)
+        processed_ids.extend(review["id"] for review in reviews)
+        return sentiment_success(reviews)
+
+    with httpx.Client(base_url="http://ml:8001", transport=httpx.MockTransport(respond)) as client:
+        assert analyze_import(scope, import_id, client) == ImportSentimentSummary(33, 0, 0)
+        assert analyze_import(scope, import_id, client) == ImportSentimentSummary(33, 0, 0)
+
+    assert sizes == [32, 16, 8, 8, 8, 8, 1]
+    assert len(processed_ids) == len(set(processed_ids)) == 33
+
+
+def test_sentiment_sends_long_review_alone_and_retries_it(
+    api: TestClient, db: Session, monkeypatch
+) -> None:
+    long_text = "Вкусный кофе. " * 800
+    csv = "date,text,rating\n" + "".join(f"2026-11-20,Отзыв {i},5\n" for i in range(32))
+    csv += f"2026-11-20,{long_text},5\n"
+    import_id = uuid.UUID(upload(api, csv.encode()).json()["import_id"])
+    scope = OrgScope(db, DEMO_ORG_ID)
+    delays = []
+    long_review_attempts = []
+    monkeypatch.setattr(ml, "sleep", delays.append)
+
+    def respond(request):
+        reviews = json.loads(request.content)["reviews"]
+        if any(review["text"].startswith("Вкусный кофе") for review in reviews):
+            assert len(reviews) == 1
+            assert reviews[0]["text"] == long_text[:10_000]
+            assert request.extensions["timeout"]["read"] == 120
+            long_review_attempts.append(reviews[0]["id"])
+            if len(long_review_attempts) == 1:
+                raise httpx.ReadTimeout("Медленный отзыв", request=request)
+        return sentiment_success(reviews)
+
+    with httpx.Client(base_url="http://ml:8001", transport=httpx.MockTransport(respond)) as client:
+        assert analyze_import(scope, import_id, client) == ImportSentimentSummary(33, 0, 0)
+
+    assert delays == [1]
+    assert len(long_review_attempts) == 2
+    assert long_review_attempts[0] == long_review_attempts[1]
 
 
 def test_sentiment_empty_or_inaccessible_import_never_calls_ml(

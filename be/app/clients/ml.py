@@ -8,9 +8,12 @@ from uuid import UUID
 import httpx
 from pydantic import BaseModel, Field, ValidationError
 
-SENTIMENT_BATCH_SIZE = 256
+# ML пакует тексты по длине самого длинного, поэтому для CPU берём запас от лимита 256.
+SENTIMENT_BATCH_SIZE = 32
+SENTIMENT_PADDED_TEXT_BUDGET = 8_192
 SENTIMENT_TEXT_LIMIT = 10_000
 SENTIMENT_TIMEOUT = httpx.Timeout(60, connect=5)
+SENTIMENT_SINGLE_TIMEOUT = httpx.Timeout(60, connect=5, read=120)
 RETRY_DELAYS = (1, 4, 16)
 
 
@@ -56,10 +59,11 @@ class SentimentResponse(BaseModel):
 
 
 class SentimentError(Exception):
-    def __init__(self, code: str, *, retryable: bool = False) -> None:
+    def __init__(self, code: str, *, retryable: bool = False, split_batch: bool = False) -> None:
         super().__init__(code)
         self.code = code
         self.retryable = retryable
+        self.split_batch = split_batch
 
 
 def get_sentiment(client: httpx.Client, reviews: list[SentimentReview]) -> SentimentResponse:
@@ -89,14 +93,20 @@ def get_sentiment(client: httpx.Client, reviews: list[SentimentReview]) -> Senti
 def _post_sentiment(
     client: httpx.Client, payload: list[dict[str, str | float | None]]
 ) -> SentimentResponse:
+    can_split = len(payload) > 1
+    timeout = client.timeout if can_split else SENTIMENT_SINGLE_TIMEOUT
     try:
-        response = client.post("/v1/sentiment", json={"reviews": payload})
+        response = client.post("/v1/sentiment", json={"reviews": payload}, timeout=timeout)
+    except httpx.ReadTimeout as exc:
+        raise SentimentError("ml_timeout", retryable=not can_split, split_batch=can_split) from exc
     except httpx.TimeoutException as exc:
         raise SentimentError("ml_timeout", retryable=True) from exc
     except httpx.RequestError as exc:
         raise SentimentError("ml_unavailable") from exc
 
     if response.status_code != 200:
+        if can_split and response.status_code in (413, 504):
+            raise SentimentError(f"ml_http_{response.status_code}", split_batch=True)
         raise SentimentError(f"ml_http_{response.status_code}", retryable=response.is_server_error)
     try:
         return SentimentResponse.model_validate_json(response.content, strict=True)

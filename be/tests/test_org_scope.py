@@ -1,9 +1,7 @@
 """Заглушка текущего пользователя, seed и изоляция организаций (REO-27).
 
-Тесты с БД идут на настоящем PostgreSQL (TEST_DATABASE_URL, см. conftest.py), каждый — внутри
-транзакции, которая откатывается: после тестов БД остаётся как была.
-Эндпоинтов с данными ещё нет, поэтому изоляцию проверяем тестовым роутером /_test/points
-на настоящих зависимостях get_current_user и get_scope.
+Тесты проверки изоляции через API точек идут на PostgreSQL (TEST_DATABASE_URL,
+см. conftest.py). Каждый тест работает внутри транзакции, которая откатывается.
 """
 
 import uuid
@@ -12,14 +10,12 @@ from collections.abc import Iterator
 import pytest
 from alembic import command
 from alembic.config import Config
-from fastapi import APIRouter
 from fastapi.testclient import TestClient
-from pydantic import BaseModel
 from sqlalchemy import Engine, create_engine, func, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.deps import Scope, get_current_user
+from app.deps import get_current_user
 from app.errors import NotFoundError
 from app.main import create_app
 from app.models import Organization, Point, User
@@ -32,41 +28,6 @@ DEMO_POINT_ID = min(DEMO_POINT_IDS)
 OTHER_POINT_ID = min(OTHER_POINT_IDS)
 
 NOT_FOUND = {"error": {"code": "not_found", "message": "Точка не найдена", "details": None}}
-
-
-# --- Тестовый роутер: так будут устроены настоящие эндпоинты точек ---
-
-points_router = APIRouter(prefix="/_test/points")
-
-
-class RenameBody(BaseModel):
-    name: str
-
-
-@points_router.get("")
-def list_points(scope: Scope) -> list[uuid.UUID]:
-    return [point.id for point in scope.db.scalars(scope.select(Point))]
-
-
-@points_router.get("/{point_id}")
-def read_point(point_id: uuid.UUID, scope: Scope) -> dict[str, str]:
-    point = scope.get(Point, point_id, message="Точка не найдена")
-    return {"id": str(point.id), "name": point.name}
-
-
-@points_router.patch("/{point_id}")
-def rename_point(point_id: uuid.UUID, body: RenameBody, scope: Scope) -> dict[str, str]:
-    point = scope.get(Point, point_id, message="Точка не найдена")
-    point.name = body.name
-    scope.db.commit()
-    return {"id": str(point.id), "name": point.name}
-
-
-@points_router.delete("/{point_id}", status_code=204)
-def delete_point(point_id: uuid.UUID, scope: Scope) -> None:
-    point = scope.get(Point, point_id, message="Точка не найдена")
-    scope.db.delete(point)
-    scope.db.commit()
 
 
 # --- Фикстуры ---
@@ -101,7 +62,6 @@ def db(engine: Engine) -> Iterator[Session]:
 @pytest.fixture
 def app(env, db: Session):
     app = create_app()
-    app.include_router(points_router)
     app.dependency_overrides[get_db] = lambda: db
     return app
 
@@ -165,28 +125,28 @@ def test_seed_is_idempotent(db: Session) -> None:
 
 
 def test_list_shows_only_own_points(api: TestClient) -> None:
-    response = api.get("/_test/points")
+    response = api.get("/points")
 
     assert response.status_code == 200
-    assert {uuid.UUID(point_id) for point_id in response.json()} == DEMO_POINT_IDS
+    assert {uuid.UUID(point["id"]) for point in response.json()["items"]} == DEMO_POINT_IDS
 
 
 def test_get_own_point(api: TestClient) -> None:
-    response = api.get(f"/_test/points/{DEMO_POINT_ID}")
+    response = api.get(f"/points/{DEMO_POINT_ID}")
 
     assert response.status_code == 200
     assert response.json()["id"] == str(DEMO_POINT_ID)
 
 
 def test_get_other_org_point_is_404(api: TestClient) -> None:
-    response = api.get(f"/_test/points/{OTHER_POINT_ID}")
+    response = api.get(f"/points/{OTHER_POINT_ID}")
 
     assert response.status_code == 404
     assert response.json() == NOT_FOUND
 
 
 def test_get_missing_point_is_same_404(api: TestClient) -> None:
-    response = api.get(f"/_test/points/{uuid.uuid4()}")
+    response = api.get(f"/points/{uuid.uuid4()}")
 
     assert response.status_code == 404
     assert response.json() == NOT_FOUND
@@ -195,7 +155,7 @@ def test_get_missing_point_is_same_404(api: TestClient) -> None:
 def test_patch_other_org_point_is_404_and_unchanged(api: TestClient, db: Session) -> None:
     name_before = point_name(db, OTHER_POINT_ID)
 
-    response = api.patch(f"/_test/points/{OTHER_POINT_ID}", json={"name": "Взлом"})
+    response = api.patch(f"/points/{OTHER_POINT_ID}", json={"name": "Чужое имя"})
 
     assert response.status_code == 404
     assert response.json() == NOT_FOUND
@@ -203,7 +163,7 @@ def test_patch_other_org_point_is_404_and_unchanged(api: TestClient, db: Session
 
 
 def test_delete_other_org_point_is_404_and_kept(api: TestClient, db: Session) -> None:
-    response = api.delete(f"/_test/points/{OTHER_POINT_ID}")
+    response = api.delete(f"/points/{OTHER_POINT_ID}")
 
     assert response.status_code == 404
     assert response.json() == NOT_FOUND
@@ -211,7 +171,7 @@ def test_delete_other_org_point_is_404_and_kept(api: TestClient, db: Session) ->
 
 
 def test_own_point_can_be_changed(api: TestClient, db: Session) -> None:
-    response = api.patch(f"/_test/points/{DEMO_POINT_ID}", json={"name": "Новое имя"})
+    response = api.patch(f"/points/{DEMO_POINT_ID}", json={"name": "Новое имя"})
 
     assert response.status_code == 200
     assert point_name(db, DEMO_POINT_ID) == "Новое имя"
@@ -222,11 +182,73 @@ def test_other_user_sees_only_own_organization(app, db: Session) -> None:
     app.dependency_overrides[get_current_user] = lambda: db.get(User, OTHER_USER_ID)
     api = TestClient(app)
 
-    listed = {uuid.UUID(point_id) for point_id in api.get("/_test/points").json()}
+    listed = {uuid.UUID(point["id"]) for point in api.get("/points").json()["items"]}
 
     assert listed == OTHER_POINT_IDS
-    assert api.get(f"/_test/points/{OTHER_POINT_ID}").status_code == 200
-    assert api.get(f"/_test/points/{DEMO_POINT_ID}").status_code == 404
+    assert api.get(f"/points/{OTHER_POINT_ID}").status_code == 200
+    assert api.get(f"/points/{DEMO_POINT_ID}").status_code == 404
+
+
+def test_create_and_patch_point(api: TestClient) -> None:
+    response = api.post(
+        "/points", json={"name": "  Кофейня  ", "address": " Адрес ", "category": " кафе "}
+    )
+    assert response.status_code == 201
+    point = response.json()
+    assert (point["name"], point["address"], point["category"]) == ("Кофейня", "Адрес", "кафе")
+    assert "organization_id" not in point
+    assert point["created_at"].endswith("Z") and point["updated_at"].endswith("Z")
+    assert (point["sources_count"], point["data_status"]) == (0, "no_sources")
+
+    url = f"/points/{point['id']}"
+    assert api.patch(url, json={}).json() == point
+    response = api.patch(url, json={"address": "Новый адрес", "category": None})
+    assert response.status_code == 200
+    assert response.json()["category"] is None
+    assert response.json()["address"] == "Новый адрес"
+    assert response.json()["name"] == point["name"]
+    assert api.get(url).json() == response.json()
+
+
+def test_possible_duplicate_can_be_confirmed_on_create_and_patch(api: TestClient) -> None:
+    existing = api.post("/points", json={"name": "Точка  в центре", "address": "Улица  1"}).json()
+    request = {"name": "  тОЧКА в центре ", "address": "улица 1"}
+    response = api.post("/points", json=request)
+    assert response.status_code == 409
+    error = response.json()["error"]
+    assert error["code"] == "possible_duplicate"
+    assert error["details"]["existing_point"] == {
+        field: existing[field] for field in ("id", "name", "address")
+    }
+    assert api.post("/points?allow_duplicate=true", json=request).status_code == 201
+
+    distinct = api.post("/points", json={"name": request["name"], "address": "Улица 2"}).json()
+    url = f"/points/{distinct['id']}"
+    assert api.patch(url, json={"address": "Улица 2"}).status_code == 200
+    assert api.patch(url, json={"address": request["address"]}).status_code == 409
+    assert api.get(url).json()["address"] == "Улица 2"
+    assert api.patch(f"{url}?allow_duplicate=true", json={"address": "улица 1"}).status_code == 200
+
+
+def test_search_pagination_and_stable_sort(api: TestClient) -> None:
+    points = [
+        api.post("/points", json={"name": "Стойка", "address": address}).json()
+        for address in ("Проспект 100%", "Квартал 100%", "Квартал 1000")
+    ]
+    params = {"q": "КВАРТАЛ 100", "sort": "-name", "limit": 1}
+    ids = sorted(point["id"] for point in points[1:])
+    for offset, expected_id in enumerate(ids):
+        page = api.get("/points", params={**params, "offset": offset}).json()
+        assert (page["limit"], page["offset"], page["total"]) == (1, offset, 2)
+        assert [point["id"] for point in page["items"]] == [expected_id]
+    assert api.get("/points", params={**params, "offset": 10}).json() == {
+        "items": [],
+        "total": 2,
+        "limit": 1,
+        "offset": 10,
+    }
+    assert api.get("/points", params={"q": "100%"}).json()["total"] == 2
+    assert api.get("/points", params={"q": "СТОЙКА"}).json()["total"] == 3
 
 
 # --- OrgScope напрямую ---

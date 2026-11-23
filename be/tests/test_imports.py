@@ -288,11 +288,30 @@ def test_save_failure_rolls_back_entire_import(db: Session, monkeypatch) -> None
 
 
 def test_point_deletion_cascades_to_source_import_and_reviews(api, db):
-    upload(api)
-    db.execute(delete(Point).where(Point.id == OWN_POINT))
-    db.flush()
+    assert upload(api).status_code == 201
+    url = f"/points/{OWN_POINT}"
+    point = api.get(url).json()
+    assert (point["sources_count"], point["data_status"]) == (1, "ok")
 
+    response = api.delete(url)
+    assert response.status_code == 204 and not response.content
     assert counts(db) == (0, 0, 0)
+    assert api.delete(url).status_code == 404
+
+
+def test_point_rolls_up_source_statuses_in_list(api, db):
+    assert upload(api).status_code == 201
+    sources = [
+        Source(point_id=OWN_POINT, kind="parser", name=status, status=status)
+        for status in ("paused", "checking", "error")
+    ]
+    for source, expected in zip(sources, ("ok", "collecting", "error"), strict=True):
+        db.add(source)
+        db.flush()
+        points = api.get("/points").json()["items"]
+        point = next(point for point in points if point["id"] == str(OWN_POINT))
+        assert point["data_status"] == expected
+    assert point["sources_count"] == 4
 
 
 def test_parser_reviews_share_schema_and_allow_no_text(api, db):

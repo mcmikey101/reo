@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.exceptions import HTTPException
 
+from app.deps import get_scope
 from app.errors import NotFoundError, register_error_handlers
 
 
@@ -73,3 +74,27 @@ def test_unexpected_error_hides_internal_details() -> None:
             "details": None,
         }
     }
+
+
+def test_point_validation_uses_contract_error_codes(client: TestClient) -> None:
+    client.app.dependency_overrides[get_scope] = lambda: None
+    responses = [
+        (
+            client.post("/points", json={"name": "Я" * 121, "address": "  ", "extra": "x"}),
+            {("name", "too_long"), ("address", "blank"), ("extra", "unknown_field")},
+        ),
+        (
+            client.patch("/points/00000000-0000-0000-0000-000000000000", json={"name": None}),
+            {("name", "required")},
+        ),
+        (client.get("/points/not-a-uuid"), {("id", "invalid_type")}),
+        (
+            client.get("/points?limit=201&sort=rating"),
+            {("limit", "invalid_value"), ("sort", "invalid_value")},
+        ),
+    ]
+    for response, expected in responses:
+        assert response.status_code == 422
+        error = response.json()["error"]
+        assert error["code"] == "validation_error"
+        assert {(field["field"], field["code"]) for field in error["details"]["fields"]} == expected

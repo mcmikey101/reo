@@ -4,7 +4,8 @@ import json
 import uuid
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date
+from contextlib import nullcontext
+from datetime import date, timedelta
 from threading import Barrier
 
 import httpx
@@ -12,7 +13,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
-from sqlalchemy import Engine, create_engine, delete, func, select
+from sqlalchemy import Engine, create_engine, delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -25,6 +26,11 @@ from app.models import Organization, Point, Review, ReviewImport, ReviewSentimen
 from app.scope import OrgScope
 from app.seed import DEMO_ORG_ID, OTHER_ORG_ID, OTHER_USER_ID, POINTS, seed
 from app.services.csv_parser import MAX_CSV_BYTES, parse_csv
+from app.services.import_analysis import (
+    get_import_analysis,
+    run_import_analysis,
+    start_import_analysis,
+)
 from app.services.imports import get_import_reviews, import_csv
 from app.services.points import delete_point
 from app.services.sentiment import ImportSentimentSummary, analyze_import
@@ -104,6 +110,128 @@ def sentiment_success(reviews):
             ],
         },
     )
+
+
+@pytest.mark.parametrize(
+    ("scores", "expected_counts", "expected_index"),
+    [
+        ([1, 1, 0, -1], (2, 1, 1), 62.5),
+        ([-1, -1, -1], (0, 0, 3), 0),
+        ([0.6, -0.5], (1, 0, 1), 52.5),
+        ([], (0, 0, 0), None),
+    ],
+)
+def test_import_analysis_index_from_saved_scores(
+    api: TestClient, db: Session, scores, expected_counts, expected_index
+) -> None:
+    other = upload(api).json()
+    csv = "date,text,rating\n" + "".join(
+        f"2026-11-20,Отзыв {i},5\n" for i in range(len(scores) + 1)
+    )
+    selected = upload(api, csv.encode()).json()
+    assert selected["source_id"] == other["source_id"]
+
+    scope = OrgScope(db, DEMO_ORG_ID)
+    reviews = get_import_reviews(scope, uuid.UUID(selected["import_id"]))
+    for review, score in zip(reviews[:-1], scores, strict=True):
+        label = "positive" if score > 0 else "negative" if score < 0 else "neutral"
+        db.add(ReviewSentiment(review_id=review.id, status="done", label=label, score=score))
+    db.add(ReviewSentiment(review_id=reviews[-1].id, status="skipped"))
+    other_review = get_import_reviews(scope, uuid.UUID(other["import_id"]))[0]
+    db.add(ReviewSentiment(review_id=other_review.id, status="done", label="positive", score=1))
+    db.commit()
+
+    url = f"/imports/{selected['import_id']}/analysis"
+    response = api.get(url)
+    assert response.status_code == 200
+    analysis = response.json()
+    assert analysis["status"] == "done"
+    assert analysis["error"] is None
+    result = analysis["result"]
+    assert result["sentiment_counts"] == dict(
+        zip(("positive", "neutral", "negative"), expected_counts, strict=True)
+    )
+    if expected_index is None:
+        assert result["satisfaction_index"] is None
+    else:
+        assert result["satisfaction_index"] == pytest.approx(expected_index)
+
+
+def test_import_analysis_reports_partial_failure_and_retries_unsuccessful_reviews(
+    api: TestClient, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "app.services.import_analysis.get_sessionmaker", lambda: lambda: nullcontext(db)
+    )
+    monkeypatch.setattr("app.services.sentiment.SENTIMENT_BATCH_SIZE", 1)
+    requests = []
+    ml_available = False
+
+    def analyze(_client, reviews):
+        review = reviews[0]
+        requests.append(review.text)
+        if review.text == "Без оценки" and not ml_available:
+            raise ml.SentimentError("ml_unavailable")
+        return ml.SentimentResponse.model_validate_json(
+            sentiment_success([{"id": str(review.id)}]).content
+        )
+
+    monkeypatch.setattr("app.services.sentiment.get_sentiment", analyze)
+    import_id = upload(api).json()["import_id"]
+    url = f"/imports/{import_id}/analysis"
+    assert api.get(url).json() == {
+        "import_id": import_id,
+        "status": "pending",
+        "result": None,
+        "error": None,
+    }
+    db.rollback()  # GET использует транзакцию запроса, здесь переиспользуется тестовая сессия.
+
+    response = api.post(url)
+    assert response.status_code == 202
+    assert response.json()["status"] == "running"
+    failed = api.get(url).json()
+    assert failed["status"] == "error"
+    assert failed["error"]["code"] == "ml_error"
+    assert failed["result"] == {
+        "sentiment_counts": {"positive": 1, "neutral": 0, "negative": 0},
+        "satisfaction_index": 85.0,
+    }
+    db.rollback()
+    assert sorted(requests) == ["Без оценки", "Вкусный кофе"]
+
+    ml_available = True
+    assert api.post(url).status_code == 202
+    repeated = api.post(url)
+    assert repeated.status_code == 200
+    assert repeated.json()["status"] == "done"
+    assert repeated.json()["result"]["sentiment_counts"]["positive"] == 2
+    assert requests[2:] == ["Без оценки"]
+
+
+def test_import_analysis_access_and_empty_result(api: TestClient, app) -> None:
+    upload(api)
+    empty_id = upload(api).json()["import_id"]
+    url = f"/imports/{empty_id}/analysis"
+    response = api.post(url)
+    assert response.status_code == 200
+    assert response.json() == {
+        "import_id": empty_id,
+        "status": "done",
+        "result": {
+            "sentiment_counts": {"positive": 0, "neutral": 0, "negative": 0},
+            "satisfaction_index": None,
+        },
+        "error": None,
+    }
+
+    app.dependency_overrides[get_current_user] = lambda: User(organization_id=OTHER_ORG_ID)
+    for request in (api.post, api.get):
+        foreign = request(url)
+        missing = request(f"/imports/{uuid.uuid4()}/analysis")
+        assert foreign.status_code == missing.status_code == 404
+        assert foreign.json() == missing.json()
+        assert request("/imports/invalid/analysis").status_code == 422
 
 
 def test_sentiment_batches_retry_errors_only(api: TestClient, db: Session, monkeypatch) -> None:
@@ -633,3 +761,66 @@ def test_concurrent_imports_create_one_source_and_no_duplicates(
         scope = OrgScope(session, organization_id)
         for result in results:
             assert len(get_import_reviews(scope, result.import_id)) == result.imported
+
+
+def test_import_analysis_concurrent_starts_and_expired_worker(
+    engine: Engine, committed_point: tuple[uuid.UUID, uuid.UUID], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    organization_id, point_id = committed_point
+    with Session(engine) as db:
+        import_id = import_csv(OrgScope(db, organization_id), point_id, VALID_CSV).import_id
+
+    barrier = Barrier(2)
+
+    def start():
+        with Session(engine) as db:
+            barrier.wait(timeout=10)
+            return start_import_analysis(OrgScope(db, organization_id), import_id)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        starts = list(executor.map(lambda _: start(), range(2)))
+    assert [analysis.status for analysis, _ in starts] == ["running", "running"]
+    (old_run,) = [run for _, run in starts if run is not None]
+
+    with Session(engine) as db:
+        assert get_import_analysis(OrgScope(db, organization_id), import_id).status == "running"
+
+    monkeypatch.setattr(
+        "app.services.import_analysis.get_sessionmaker", lambda: lambda: Session(engine)
+    )
+    replacement_run = None
+
+    def respond_after_expiration(_client, reviews):
+        nonlocal replacement_run
+        with Session(engine) as db:
+            scope = OrgScope(db, organization_id)
+            db.execute(
+                update(ReviewImport)
+                .where(ReviewImport.id == import_id)
+                .values(analysis_lease_until=func.clock_timestamp() - timedelta(seconds=1))
+            )
+            db.commit()
+            expired = get_import_analysis(scope, import_id)
+            assert expired.status == "error"
+            assert expired.error.code == "analysis_failed"
+            db.rollback()
+            _, replacement_run = start_import_analysis(scope, import_id)
+        return ml.SentimentResponse.model_validate_json(
+            sentiment_success([{"id": str(review.id)} for review in reviews]).content
+        )
+
+    monkeypatch.setattr("app.services.sentiment.get_sentiment", respond_after_expiration)
+    run_import_analysis(organization_id, import_id, old_run)
+    assert replacement_run is not None and replacement_run != old_run
+    with Session(engine) as db:
+        assert get_import_analysis(OrgScope(db, organization_id), import_id).status == "running"
+        assert db.get(ReviewImport, import_id).analysis_run_id == replacement_run
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(ReviewSentiment)
+                .join(Review)
+                .where(Review.import_id == import_id)
+            )
+            == 0
+        )

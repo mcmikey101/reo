@@ -1,8 +1,8 @@
 """Демо-данные до E10: две организации с точками и по пользователю в каждой.
 
 Запуск из папки be/: python -m app.seed (контейнер api делает это при старте после миграций).
-Скрипт идемпотентный: записи с фиксированными id вставляются, только если их ещё нет.
-Повторный запуск ничего не дублирует и не перезаписывает изменённые записи.
+Скрипт идемпотентный: точки добавляются только вместе с новой демо-организацией.
+Повторный запуск сохраняет изменения в точках, в том числе удаление.
 
 Организация A — демо-организация: её пользователь подставляется заглушкой get_current_user
 (app/deps.py). Организация B нужна, чтобы проверять изоляцию: её данные A не видит.
@@ -81,22 +81,27 @@ POINTS = [
 ]
 
 
-def _insert_missing(session: Session, model: type[Base], rows: list[dict[str, Any]]) -> int:
+def _insert_missing(
+    session: Session, model: type[Base], rows: list[dict[str, Any]]
+) -> list[uuid.UUID]:
     # Без указания конфликта пропускаются и занятые id, и занятый email пользователя.
-    # RETURNING отдаёт только вставленные строки: так считаем, сколько добавлено
+    # RETURNING отдаёт id только вставленных строк.
     statement = insert(model).values(rows).on_conflict_do_nothing().returning(model.id)
-    return len(session.execute(statement).all())
+    return list(session.scalars(statement))
 
 
 def seed(session: Session) -> dict[str, int]:
-    """Добавляет недостающие демо-записи. Возвращает, сколько записей каждой таблицы вставлено.
+    """Добавляет демо-организации, пользователей и точки новых организаций.
 
     Не коммитит: транзакцией управляет вызывающий.
     """
+    organizations = set(_insert_missing(session, Organization, ORGANIZATIONS))
+    users = _insert_missing(session, User, USERS)
+    points = [point for point in POINTS if point["organization_id"] in organizations]
     return {
-        "organizations": _insert_missing(session, Organization, ORGANIZATIONS),
-        "users": _insert_missing(session, User, USERS),
-        "points": _insert_missing(session, Point, POINTS),
+        "organizations": len(organizations),
+        "users": len(users),
+        "points": len(_insert_missing(session, Point, points)) if points else 0,
     }
 
 

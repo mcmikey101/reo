@@ -121,6 +121,14 @@ def test_seed_is_idempotent(db: Session) -> None:
     assert counts() == before
 
 
+def test_seed_does_not_restore_a_deleted_point(api: TestClient, db: Session) -> None:
+    url = f"/points/{DEMO_POINT_ID}"
+    assert api.delete(url).status_code == 204
+
+    assert seed(db) == {"organizations": 0, "users": 0, "points": 0}
+    assert api.get(url).status_code == 404
+
+
 # --- Изоляция через API ---
 
 

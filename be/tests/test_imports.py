@@ -21,8 +21,9 @@ from app.main import create_app
 from app.models import Organization, Point, Review, ReviewImport, Source, User
 from app.scope import OrgScope
 from app.seed import DEMO_ORG_ID, OTHER_ORG_ID, OTHER_USER_ID, POINTS, seed
-from app.services.csv_parser import MAX_CSV_BYTES
+from app.services.csv_parser import MAX_CSV_BYTES, parse_csv
 from app.services.imports import get_import_reviews, import_csv
+from app.services.points import delete_point
 
 OWN_POINTS = [p["id"] for p in POINTS if p["organization_id"] == DEMO_ORG_ID]
 OWN_POINT = OWN_POINTS[0]
@@ -345,8 +346,8 @@ def test_database_rejects_import_from_another_source(api, db):
     db.rollback()
 
 
-def test_concurrent_imports_create_one_source_and_no_duplicates(engine: Engine) -> None:
-    # Отдельные соединения требуют зафиксированной точки вне транзакционной фикстуры db.
+@pytest.fixture
+def committed_point(engine: Engine) -> Iterator[tuple[uuid.UUID, uuid.UUID]]:
     with Session(engine, expire_on_commit=False) as session:
         organization = Organization(name="Проверка параллельного импорта")
         session.add(organization)
@@ -355,28 +356,47 @@ def test_concurrent_imports_create_one_source_and_no_duplicates(engine: Engine) 
         session.add(point)
         session.commit()
 
+    try:
+        yield organization.id, point.id
+    finally:
+        with Session(engine) as session:
+            session.execute(delete(Organization).where(Organization.id == organization.id))
+            session.commit()
+
+
+def test_import_handles_point_deleted_during_csv_parsing(
+    engine: Engine, committed_point: tuple[uuid.UUID, uuid.UUID], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    organization_id, point_id = committed_point
+
+    def parse_and_delete(content: bytes):
+        parsed = parse_csv(content)
+        with Session(engine) as session:
+            delete_point(OrgScope(session, organization_id), point_id)
+        return parsed
+
+    monkeypatch.setattr("app.services.imports.parse_csv", parse_and_delete)
+    with Session(engine, autoflush=False) as session:
+        with pytest.raises(NotFoundError, match="Точка не найдена"):
+            import_csv(OrgScope(session, organization_id), point_id, VALID_CSV)
+
+
+def test_concurrent_imports_create_one_source_and_no_duplicates(
+    engine: Engine, committed_point: tuple[uuid.UUID, uuid.UUID]
+) -> None:
+    organization_id, point_id = committed_point
     barrier = Barrier(2)
 
     def load():
         with Session(engine, autoflush=False, expire_on_commit=False) as session:
             barrier.wait(timeout=10)
-            return import_csv(OrgScope(session, organization.id), point.id, VALID_CSV)
+            return import_csv(OrgScope(session, organization_id), point_id, VALID_CSV)
 
-    try:
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            results = list(executor.map(lambda _: load(), range(2)))
-        assert len({r.source_id for r in results}) == 1
-        assert sorted((r.imported, r.duplicates) for r in results) == [(0, 2), (2, 0)]
-        with Session(engine) as session:
-            assert (
-                len(get_import_reviews(OrgScope(session, organization.id), results[0].import_id))
-                == results[0].imported
-            )
-            assert (
-                len(get_import_reviews(OrgScope(session, organization.id), results[1].import_id))
-                == results[1].imported
-            )
-    finally:
-        with Session(engine) as session:
-            session.execute(delete(Organization).where(Organization.id == organization.id))
-            session.commit()
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _: load(), range(2)))
+    assert len({r.source_id for r in results}) == 1
+    assert sorted((r.imported, r.duplicates) for r in results) == [(0, 2), (2, 0)]
+    with Session(engine) as session:
+        scope = OrgScope(session, organization_id)
+        for result in results:
+            assert len(get_import_reviews(scope, result.import_id)) == result.imported

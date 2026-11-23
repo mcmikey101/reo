@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import select, text
+from sqlalchemy import Select, select, text
 from sqlalchemy.dialects.postgresql import insert
 
 from app.errors import NotFoundError
@@ -95,14 +95,20 @@ def import_csv(scope: OrgScope, point_id: UUID, content: bytes) -> CsvImportResu
         raise
 
 
+def select_import(scope: OrgScope, import_id: UUID) -> Select[tuple[ReviewImport]]:
+    """Импорт доступен через точку текущей организации."""
+    return (
+        scope.select(Point)
+        .with_only_columns(ReviewImport, maintain_column_froms=True)
+        .join(Source, Source.point_id == Point.id)
+        .join(ReviewImport, ReviewImport.source_id == Source.id)
+        .where(ReviewImport.id == import_id)
+    )
+
+
 def get_import_reviews(scope: OrgScope, import_id: UUID) -> list[Review]:
     """Только новые отзывы импорта своей организации; чужой и отсутствующий — 404."""
-    report = scope.db.scalar(
-        select(ReviewImport)
-        .join(Source, Source.id == ReviewImport.source_id)
-        .join(Point, Point.id == Source.point_id)
-        .where(ReviewImport.id == import_id, Point.organization_id == scope.organization_id)
-    )
+    report = scope.db.scalar(select_import(scope, import_id))
     if report is None:
         raise NotFoundError("Импорт не найден")
     return list(

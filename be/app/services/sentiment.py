@@ -85,15 +85,19 @@ def analyze_import(
         after = batch[-1].id
 
     with scope.db.begin():
-        _require_import(scope, import_id)
-        counts = dict(
-            scope.db.execute(
-                select(ReviewSentiment.status, func.count())
-                .join(Review, Review.id == ReviewSentiment.review_id)
-                .where(Review.import_id == import_id)
-                .group_by(ReviewSentiment.status)
-            ).all()
-        )
+        return get_import_sentiment_summary(scope, import_id)
+
+
+def get_import_sentiment_summary(scope: OrgScope, import_id: UUID) -> ImportSentimentSummary:
+    _require_import(scope, import_id)
+    counts = dict(
+        scope.db.execute(
+            select(ReviewSentiment.status, func.count())
+            .join(Review, Review.id == ReviewSentiment.review_id)
+            .where(Review.import_id == import_id)
+            .group_by(ReviewSentiment.status)
+        ).all()
+    )
     return ImportSentimentSummary(
         counts.get("done", 0), counts.get("skipped", 0), counts.get("error", 0)
     )

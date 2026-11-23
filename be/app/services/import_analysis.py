@@ -8,7 +8,7 @@ from sqlalchemy import func, select, update
 from app.clients.ml import SENTIMENT_TIMEOUT
 from app.config import get_settings
 from app.db import get_sessionmaker
-from app.errors import NotFoundError
+from app.errors import AppError, NotFoundError
 from app.models import Review, ReviewImport, ReviewSentiment
 from app.schemas.imports import (
     ImportAnalysis,
@@ -18,7 +18,7 @@ from app.schemas.imports import (
 )
 from app.scope import OrgScope
 from app.services.imports import select_import
-from app.services.sentiment import analyze_import
+from app.services.sentiment import ImportSentimentSummary, analyze_import
 
 logger = logging.getLogger(__name__)
 
@@ -30,16 +30,26 @@ class AnalysisRunExpired(Exception):
     """Попытка больше не владеет запуском анализа."""
 
 
+class AnalysisBusyError(AppError):
+    status_code = 503
+    code = "analysis_busy"
+    message = "Все обработчики анализа заняты. Повторите запрос позже"
+
+
 def get_import_analysis(scope: OrgScope, import_id: UUID) -> ImportAnalysis:
     report = _get_report(scope, import_id, for_start=False)
     return _analysis_status(scope, report)
 
 
-def start_import_analysis(scope: OrgScope, import_id: UUID) -> tuple[ImportAnalysis, UUID | None]:
+def start_import_analysis(
+    scope: OrgScope, import_id: UUID, *, allow_start: bool = True
+) -> tuple[ImportAnalysis, UUID | None]:
     report = _get_report(scope, import_id, for_start=True)
     analysis = _analysis_status(scope, report)
     if analysis.status in ("running", "done"):
         return analysis, None
+    if not allow_start:
+        raise AnalysisBusyError()
 
     run_id = uuid4()
     report.analysis_run_id = run_id
@@ -99,7 +109,9 @@ def _analysis_status(scope: OrgScope, report: ReviewImport) -> ImportAnalysis:
     )
 
 
-def run_import_analysis(organization_id: UUID, import_id: UUID, run_id: UUID) -> None:
+def run_import_analysis(
+    organization_id: UUID, import_id: UUID, run_id: UUID
+) -> ImportSentimentSummary | None:
     with get_sessionmaker()() as db:
         scope = OrgScope(db, organization_id)
         owned_run = update(ReviewImport).where(
@@ -115,21 +127,23 @@ def run_import_analysis(organization_id: UUID, import_id: UUID, run_id: UUID) ->
             if renewed is None:
                 raise AnalysisRunExpired
 
-        failed = False
         try:
             with httpx.Client(
                 base_url=get_settings().ml_url, timeout=SENTIMENT_TIMEOUT, trust_env=False
             ) as client:
-                analyze_import(scope, import_id, client, renew_run=renew_run)
+                summary = analyze_import(scope, import_id, client, renew_run=renew_run)
         except (NotFoundError, AnalysisRunExpired):
-            return
+            return None
         except Exception:
             logger.exception("Импорт %s: не удалось завершить анализ", import_id)
-            failed = True
+            summary = None
 
         with db.begin():
-            db.execute(
+            completed = db.scalar(
                 owned_run.values(
-                    analysis_run_id=None, analysis_lease_until=None, analysis_failed=failed
-                )
+                    analysis_run_id=None,
+                    analysis_lease_until=None,
+                    analysis_failed=summary is None,
+                ).returning(ReviewImport.id)
             )
+        return summary if completed is not None else None

@@ -7,10 +7,11 @@ GET /health, GET /v1/health и POST /v1/sentiment.
     uvicorn api.main:app --host 0.0.0.0 --port 8001
 """
 
+import asyncio
 import logging
 import math
 from collections import Counter
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import Any, Literal, Protocol
 
 from fastapi import FastAPI, Request
@@ -202,13 +203,30 @@ def analyze(reviews: list[ReviewIn], model: SentimentModel) -> list[SentimentRes
 # ---------------------------------------------------------------------------
 
 
+async def initialize_sentiment(app: FastAPI) -> None:
+    try:
+        model = await asyncio.to_thread(load_sentiment_model)
+    except Exception:
+        app.state.sentiment_load_failed = True
+        logger.exception("Не удалось загрузить модель тональности")
+        return
+
+    app.state.sentiment = model
+    logger.info("Модель тональности загружена: %s", model.version)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.sentiment = load_sentiment_model()
-    app.state.mock = getattr(app.state.sentiment, "mock", False)
-    logger.info("Модель тональности загружена: %s", app.state.sentiment.version)
-    yield
     app.state.sentiment = None
+    app.state.sentiment_load_failed = False
+    loading = asyncio.create_task(initialize_sentiment(app))
+    try:
+        yield
+    finally:
+        loading.cancel()
+        with suppress(asyncio.CancelledError):
+            await loading
+        app.state.sentiment = None
 
 
 app = FastAPI(title="reo ML", version="0.1.0", lifespan=lifespan)
@@ -254,8 +272,14 @@ async def unhandled_error_handler(request: Request, exc: Exception) -> JSONRespo
     return error_response(500, "internal_error", "Внутренняя ошибка ML-сервиса")
 
 
+def loaded_model(request: Request) -> SentimentModel | None:
+    if getattr(request.app.state, "sentiment_load_failed", False):
+        raise ServiceError(500, "internal_error", "Не удалось загрузить модель тональности")
+    return getattr(request.app.state, "sentiment", None)
+
+
 def get_model(request: Request) -> SentimentModel:
-    model = getattr(request.app.state, "sentiment", None)
+    model = loaded_model(request)
     if model is None:
         raise ServiceError(503, "model_not_ready", "Модель ещё загружается, повторите позже")
     return model
@@ -263,12 +287,11 @@ def get_model(request: Request) -> SentimentModel:
 
 @app.get("/v1/health", response_model=HealthResponse)
 def health(request: Request) -> HealthResponse | JSONResponse:
-    model = getattr(request.app.state, "sentiment", None)
-    mock = getattr(request.app.state, "mock", False)
+    model = loaded_model(request)
     if model is None:
-        body = HealthResponse(status="loading", models={}, mock=mock)
+        body = HealthResponse(status="loading", models={}, mock=False)
         return JSONResponse(status_code=503, content=body.model_dump())
-    return HealthResponse(status="ok", models={"sentiment": model.version}, mock=mock)
+    return HealthResponse(status="ok", models={"sentiment": model.version}, mock=model.mock)
 
 
 @app.post("/v1/sentiment", response_model=SentimentResponse)

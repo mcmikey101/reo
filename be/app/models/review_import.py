@@ -1,7 +1,8 @@
 import uuid
+from datetime import datetime
 from typing import Any
 
-from sqlalchemy import CheckConstraint, ForeignKey, UniqueConstraint
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, UniqueConstraint, false
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -29,3 +30,6 @@ class ReviewImport(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     duplicates: Mapped[int]
     rejected: Mapped[int]
     errors: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
+    analysis_run_id: Mapped[uuid.UUID | None]
+    analysis_lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    analysis_failed: Mapped[bool] = mapped_column(server_default=false())

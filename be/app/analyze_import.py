@@ -5,15 +5,12 @@ import logging
 import sys
 from uuid import UUID
 
-import httpx
-
-from app.clients.ml import SENTIMENT_TIMEOUT
-from app.config import get_settings
 from app.db import get_sessionmaker
 from app.deps import get_current_user
 from app.errors import NotFoundError
 from app.scope import OrgScope
-from app.services.sentiment import analyze_import
+from app.services.import_analysis import run_import_analysis, start_import_analysis
+from app.services.sentiment import get_import_sentiment_summary
 
 
 def main() -> int:
@@ -24,16 +21,24 @@ def main() -> int:
 
     with get_sessionmaker()() as db:
         # Используем того же пользователя, что и API. Сейчас это пользователь из seed.
-        with db.begin():
-            scope = OrgScope(db, get_current_user(db).organization_id)
-        with httpx.Client(
-            base_url=get_settings().ml_url, timeout=SENTIMENT_TIMEOUT, trust_env=False
-        ) as client:
-            try:
-                summary = analyze_import(scope, args.import_id, client)
-            except NotFoundError as exc:
-                print(exc.message, file=sys.stderr)
-                return 1
+        scope = OrgScope(db, get_current_user(db).organization_id)
+        try:
+            analysis, run_id = start_import_analysis(scope, args.import_id)
+        except NotFoundError as exc:
+            print(exc.message, file=sys.stderr)
+            return 1
+
+        if analysis.status == "done":
+            summary = get_import_sentiment_summary(scope, args.import_id)
+        elif run_id is None:
+            print("Анализ этого импорта уже выполняется", file=sys.stderr)
+            return 1
+        else:
+            summary = run_import_analysis(scope.organization_id, args.import_id, run_id)
+
+    if summary is None:
+        print("Не удалось завершить анализ", file=sys.stderr)
+        return 1
 
     print(
         f"Импорт {args.import_id}: done={summary.done}, "

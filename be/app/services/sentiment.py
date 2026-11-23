@@ -1,6 +1,7 @@
 """Анализ выбранного CSV-импорта вне запроса загрузки."""
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
@@ -35,7 +36,11 @@ class ImportSentimentSummary:
 
 
 def analyze_import(
-    scope: OrgScope, import_id: UUID, client: httpx.Client
+    scope: OrgScope,
+    import_id: UUID,
+    client: httpx.Client,
+    *,
+    renew_run: Callable[[], None] | None = None,
 ) -> ImportSentimentSummary:
     """Обработать отзывы без результата и ошибки. Сервис управляет транзакциями сессии."""
     with scope.db.begin():
@@ -45,6 +50,8 @@ def analyze_import(
     batch_size = SENTIMENT_BATCH_SIZE
     while True:
         with scope.db.begin():
+            if renew_run is not None:
+                renew_run()
             batch = _next_batch(scope, import_id, after, batch_size)
         if not batch:
             break
@@ -69,6 +76,8 @@ def analyze_import(
                 {"review_id": review.id, "status": "error", "reason": exc.code} for review in batch
             ]
         with scope.db.begin():
+            if renew_run is not None:
+                renew_run()
             # Импорт могли удалить во время запроса к ML. Защищаем запись до commit.
             _require_import(scope, import_id, lock=True)
             _save_results(scope, rows)
@@ -76,15 +85,19 @@ def analyze_import(
         after = batch[-1].id
 
     with scope.db.begin():
-        _require_import(scope, import_id)
-        counts = dict(
-            scope.db.execute(
-                select(ReviewSentiment.status, func.count())
-                .join(Review, Review.id == ReviewSentiment.review_id)
-                .where(Review.import_id == import_id)
-                .group_by(ReviewSentiment.status)
-            ).all()
-        )
+        return get_import_sentiment_summary(scope, import_id)
+
+
+def get_import_sentiment_summary(scope: OrgScope, import_id: UUID) -> ImportSentimentSummary:
+    _require_import(scope, import_id)
+    counts = dict(
+        scope.db.execute(
+            select(ReviewSentiment.status, func.count())
+            .join(Review, Review.id == ReviewSentiment.review_id)
+            .where(Review.import_id == import_id)
+            .group_by(ReviewSentiment.status)
+        ).all()
+    )
     return ImportSentimentSummary(
         counts.get("done", 0), counts.get("skipped", 0), counts.get("error", 0)
     )

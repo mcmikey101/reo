@@ -92,10 +92,11 @@ def test_file_errors(content: bytes) -> None:
         parse_csv(content)
 
 
-def test_syntax_error_reports_first_line_of_multiline_record() -> None:
+@pytest.mark.parametrize("text", ['"Не закрыто\nи продолжение', 'Кавычки "без обрамления"'])
+def test_syntax_error_reports_first_line_of_invalid_record(text: str) -> None:
     with pytest.raises(InvalidCsvError) as exc:
-        parse_csv(csv('2026-11-20,Норма,5\n2026-11-21,"Не закрыто\nи продолжение,5'))
-    assert exc.value.details == {"row": 3}
+        parse_csv(csv(f'2026-11-20,"Норма\nи продолжение",5\n2026-11-21,{text},5'))
+    assert exc.value.details == {"row": 4}
 
 
 def test_header_only_is_empty_import() -> None:

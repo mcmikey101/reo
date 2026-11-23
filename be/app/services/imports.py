@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert
 
 from app.errors import NotFoundError
@@ -24,7 +24,9 @@ def import_csv(scope: OrgScope, point_id: UUID, content: bytes) -> CsvImportResu
             insert(Source)
             .values(point_id=point.id, kind="csv", name="Импорт CSV")
             .on_conflict_do_nothing(
-                index_elements=[Source.point_id], index_where=Source.kind == "csv"
+                index_elements=[Source.point_id],
+                # Общему плану нужен литерал для сопоставления с частичным индексом.
+                index_where=text("kind = 'csv'"),
             )
         )
         source = scope.db.scalars(

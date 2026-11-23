@@ -15,6 +15,10 @@ from app.schemas.imports import CsvRowError
 MAX_CSV_BYTES = 10 * 1024 * 1024
 HEADER = ["date", "text", "rating"]
 RATING_MESSAGE = "Оценка должна быть числом от 1 до 5 или пустой"
+SYNTAX_MESSAGE = "Нарушен синтаксис CSV: проверьте кавычки"
+# csv.reader даже в строгом режиме допускает кавычки в необрамлённом поле.
+CSV_FIELD = r'(?:"(?:[^"]++|"")*+"|[^",\r\n]*+)'
+CSV_RECORD = re.compile(rf"{CSV_FIELD}(?:,{CSV_FIELD})*+(?:\r\n|[\r\n])?")
 # Стандартный лимит csv (128 КиБ) меньше допустимого текста в файле.
 csv.field_size_limit(max(csv.field_size_limit(), MAX_CSV_BYTES))
 
@@ -70,7 +74,8 @@ def parse_csv(content: bytes) -> ParsedCsv:
     except UnicodeDecodeError as exc:
         raise InvalidCsvError("Файл должен быть в кодировке UTF-8") from exc
 
-    reader = csv.reader(io.StringIO(decoded, newline=""), strict=True)
+    stream = io.StringIO(decoded, newline="")
+    reader = csv.reader(stream, strict=True)
     row_number = 1
     parsed = ParsedCsv(reviews=[], errors=[])
     try:
@@ -79,9 +84,12 @@ def parse_csv(content: bytes) -> ParsedCsv:
             raise InvalidCsvError("Заголовок должен быть date,text,rating", row=1)
         while True:
             row_number = reader.line_num + 1
+            start = stream.tell()
             row = next(reader, None)
             if row is None:
                 break
+            if CSV_RECORD.fullmatch(decoded, start, stream.tell()) is None:
+                raise InvalidCsvError(SYNTAX_MESSAGE, row=row_number)
             if not row:
                 continue
             result = _parse_row(row, row_number)
@@ -90,7 +98,7 @@ def parse_csv(content: bytes) -> ParsedCsv:
             else:
                 parsed.reviews.append(result)
     except csv.Error as exc:
-        raise InvalidCsvError("Нарушен синтаксис CSV: проверьте кавычки", row=row_number) from exc
+        raise InvalidCsvError(SYNTAX_MESSAGE, row=row_number) from exc
     return parsed
 
 

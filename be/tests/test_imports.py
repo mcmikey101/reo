@@ -121,6 +121,14 @@ def test_repeat_upload_keeps_original_import_membership(api: TestClient, db: Ses
     assert get_import_reviews(scope, uuid.UUID(second["import_id"])) == []
 
 
+def test_repeated_uploads_on_one_connection(api: TestClient, db: Session) -> None:
+    # Серия загрузок использует одно соединение и запускает подготовку запросов psycopg.
+    for _ in range(12):
+        assert upload(api).status_code == 201
+
+    assert counts(db) == (1, 12, 2)
+
+
 def test_dedup_inside_file_and_between_files(api: TestClient, db: Session) -> None:
     response = upload(api, VALID_CSV + " 2026-11-20 , Вкусный кофе ,5.0\n".encode())
     assert (response.json()["imported"], response.json()["duplicates"]) == (2, 1)
@@ -187,7 +195,13 @@ def test_scope_follows_current_user_and_hides_imports(app, db: Session) -> None:
 
 @pytest.mark.parametrize(
     "content",
-    [b"", b"date;text;rating\n", b"date,text,rating\n\xff", VALID_CSV + b'2026-11-22,"oops,5'],
+    [
+        b"",
+        b"date;text;rating\n",
+        b"date,text,rating\n\xff",
+        VALID_CSV + b'2026-11-22,"oops,5',
+        VALID_CSV + b'2026-11-22,Text with "bare quotes",5',
+    ],
 )
 def test_invalid_file_does_not_save_anything(api: TestClient, db: Session, content: bytes):
     response = upload(api, content)

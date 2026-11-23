@@ -74,7 +74,7 @@ ML-сервис не имеет доступа к БД: бэкенд перед�
 {
   "status": "ok",
   "models": {
-    "sentiment": "sent-0.1",
+    "sentiment": "r1char9/rubert-base-cased-russian-sentiment@364be199",
     "forecast": "fc-0.1"
   },
   "mock": false
@@ -83,7 +83,7 @@ ML-сервис не имеет доступа к БД: бэкенд перед�
 
 `status`: `ok` — можно слать запросы; `loading` — модели загружаются, ответ приходит с кодом 503 и тем же телом (не в формате `error`), `models` при этом пустой.
 
-`mock: true` — сервис отвечает заглушкой (сейчас `sentiment: "mock-0.1"`). Результаты заглушки бэкенд может сохранять для отладки, но при появлении настоящей модели они пересчитываются как при смене версии (раздел 6).
+В production `mock: false`: используется `r1char9/rubert-base-cased-russian-sentiment`, ревизия `364be199`. Точное значение `models.sentiment` — `r1char9/rubert-base-cased-russian-sentiment@364be199`; при смене ревизии результаты нужно пересчитать согласно разделу 6.
 
 ---
 
@@ -129,7 +129,7 @@ ML-сервис не имеет доступа к БД: бэкенд перед�
 
 ```json
 {
-  "model_version": "sent-0.1",
+  "model_version": "r1char9/rubert-base-cased-russian-sentiment@364be199",
   "results": [
     {"id": "r1", "status": "ok", "reason": null, "method": "model",
      "label": "neutral", "probs": {"pos": 0.30, "neu": 0.45, "neg": 0.25}, "score": 0.05},
@@ -347,3 +347,4 @@ score(отзыв)   = p_pos − p_neg                          ∈ [−1; 1]
 |---|---|---|
 | 0.1 | 09.11.2026 | Первый черновик: `/v1/health`, `/v1/sentiment`, `/v1/forecast`, индекс, агрегаты, конвейер |
 | 0.2 | 10.11.2026 | Разделы 1–3 утверждены (REO-26): `GET /health`, формат `details`, изоляция ошибок по отзыву (`invalid_rating`), уникальность `id`, обрезка текста, пороги дробных оценок, учёт отзывов без текста в показателях. Разделы 4–6 помечены как черновик |
+| 0.3 | 23.11.2026 | Для `/v1/sentiment` подключена `r1char9/rubert-base-cased-russian-sentiment`, версия модели включает закреплённую ревизию `364be199` |

@@ -1,0 +1,5 @@
+model_id: r1char9/rubert-base-cased-russian-sentiment
+revision: 364be199aed60beda23010f04ba76d47d45b404a
+device: cpu
+max_tokens: 512
+inference_batch_size: 256

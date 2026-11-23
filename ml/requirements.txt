@@ -4,6 +4,9 @@
 fastapi==0.162.2
 uvicorn[standard]==0.54.0
 pydantic==2.14.3
+torch==2.12.0
+transformers==5.22.2
+PyYAML==6.0.3
 
 # Разработка: тесты и линтер (используются и в CI)
 pytest==9.2.0

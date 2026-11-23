@@ -3,13 +3,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from api.main import MAX_BATCH, MAX_TEXT_CHARS, ReviewIn, app
-
-
-@pytest.fixture
-def client():
-    with TestClient(app) as test_client:
-        yield test_client
+from api.main import MAX_BATCH, MAX_TEXT_CHARS, ReviewIn
 
 
 def post(client: TestClient, reviews: list[dict]) -> dict:

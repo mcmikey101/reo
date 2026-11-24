@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
-import { beforeAll, describe, expect, it, vi } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { API_URL } from '../../api/client'
 import type { ImportAnalysis } from '../../api/importAnalysis'
@@ -43,6 +43,12 @@ describe('Анализ CSV-импорта', () => {
     // jsdom не реализует императивное открытие нативного <dialog>.
     HTMLDialogElement.prototype.showModal ??= function () { this.open = true }
     HTMLDialogElement.prototype.close ??= function () { this.open = false }
+  })
+
+  beforeEach(() => {
+    server.use(http.get(`${API_URL}/points`, () =>
+      HttpResponse.json({ items: [demoImportPoint], total: 1, limit: 50, offset: 0 }),
+    ))
   })
 
   it('запускает анализ выбранного импорта без тела запроса и опрашивает статус до результата', async () => {

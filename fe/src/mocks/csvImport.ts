@@ -3,11 +3,17 @@ import { http, HttpResponse } from 'msw'
 import { API_URL } from '../api/client'
 import type { CsvImportResult } from '../api/csvImport'
 import type { ImportAnalysis } from '../api/importAnalysis'
+import type { Point } from '../api/points'
 
-export const demoImportPoint = {
+export const demoImportPoint: Point = {
   id: 'a0000000-0000-4000-8000-000000000201',
   name: 'Зерно на Тверской',
   address: 'Москва, ул. Тверская, 1',
+  category: 'Кофейня',
+  sources_count: 0,
+  data_status: 'no_sources',
+  created_at: '2026-11-20T09:00:00Z',
+  updated_at: '2026-11-20T09:00:00Z',
 }
 
 export const demoImportResult: CsvImportResult = {
@@ -49,13 +55,11 @@ function mockAnalysisResponse(importId: string, start: boolean) {
   return HttpResponse.json(analysis, { status: start && analysis.status === 'running' ? 202 : 200 })
 }
 
-export const csvImportHandlers = [
-  http.get(`${API_URL}/points`, () =>
-    HttpResponse.json({ items: [demoImportPoint], total: 1, limit: 50, offset: 0 }),
-  ),
-  http.post(`${API_URL}/imports/csv`, async ({ request }) => {
+export function csvImportHandler(hasPoint: (id: string) => boolean) {
+  return http.post(`${API_URL}/imports/csv`, async ({ request }) => {
     const body = await request.formData()
-    if (body.get('point_id') !== demoImportPoint.id) {
+    const pointId = body.get('point_id')
+    if (typeof pointId !== 'string' || !hasPoint(pointId)) {
       return HttpResponse.json({ error: { code: 'not_found', message: 'Точка не найдена', details: null } }, { status: 404 })
     }
     const file = body.get('file')
@@ -65,8 +69,11 @@ export const csvImportHandlers = [
     // Ответ из примера в docs/api-contract.md для просмотра штатного отчёта.
     const importId = crypto.randomUUID()
     mockImports.set(importId, {})
-    return HttpResponse.json({ ...demoImportResult, import_id: importId }, { status: 201 })
-  }),
+    return HttpResponse.json({ ...demoImportResult, point_id: pointId, import_id: importId }, { status: 201 })
+  })
+}
+
+export const importAnalysisHandlers = [
   http.post<{ importId: string }>(`${API_URL}/imports/:importId/analysis`, ({ params }) =>
     mockAnalysisResponse(params.importId, true),
   ),

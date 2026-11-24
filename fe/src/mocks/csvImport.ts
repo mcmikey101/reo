@@ -2,11 +2,17 @@ import { http, HttpResponse } from 'msw'
 
 import { API_URL } from '../api/client'
 import type { CsvImportResult } from '../api/csvImport'
+import type { Point } from '../api/points'
 
-export const demoImportPoint = {
+export const demoImportPoint: Point = {
   id: 'a0000000-0000-4000-8000-000000000201',
   name: 'Зерно на Тверской',
   address: 'Москва, ул. Тверская, 1',
+  category: 'Кофейня',
+  sources_count: 0,
+  data_status: 'no_sources',
+  created_at: '2026-11-20T09:00:00Z',
+  updated_at: '2026-11-20T09:00:00Z',
 }
 
 export const demoImportResult: CsvImportResult = {

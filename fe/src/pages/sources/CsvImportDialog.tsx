@@ -2,7 +2,8 @@ import { FileSpreadsheet, LoaderCircle, Upload, X } from 'lucide-react'
 import { useLayoutEffect, useRef, useState, type FormEvent } from 'react'
 import { Link } from 'react-router'
 
-import { MAX_CSV_BYTES, useCsvImport, useImportPoints } from '../../api/csvImport'
+import { MAX_CSV_BYTES, useCsvImport } from '../../api/csvImport'
+import { usePoint, usePoints } from '../../api/points'
 import { buttonClass } from '../../components/button'
 import { paths } from '../../paths'
 import type { CsvReport } from './CsvImportReport'
@@ -10,20 +11,25 @@ import type { CsvReport } from './CsvImportReport'
 const CSV_EXAMPLE = 'date,text,rating\n2026-11-20,"Вкусный кофе, быстро обслужили",5\n2026-11-21,Уютное место,'
 
 interface CsvImportDialogProps {
+  initialPointId?: string
   onClose: () => void
   onImported: (report: CsvReport) => void
 }
 
-export function CsvImportDialog({ onClose, onImported }: CsvImportDialogProps) {
+export function CsvImportDialog({ initialPointId, onClose, onImported }: CsvImportDialogProps) {
   const dialog = useRef<HTMLDialogElement>(null)
   const fileInput = useRef<HTMLInputElement>(null)
   const submitInProgress = useRef(false)
-  const [pointId, setPointId] = useState('')
+  const [pointId, setPointId] = useState(initialPointId ?? '')
   const [file, setFile] = useState<File | null>(null)
   const [fileError, setFileError] = useState('')
-  const pointList = useImportPoints()
+  const pointList = usePoints('')
   const upload = useCsvImport()
-  const points = pointList.data?.pages.flatMap((page) => page.items) ?? []
+  const listedPoints = pointList.data?.pages.flatMap((page) => page.items) ?? []
+  const needsLinkedPoint = initialPointId !== undefined && !pointList.isPending &&
+    !listedPoints.some((point) => point.id === initialPointId)
+  const linkedPoint = usePoint(needsLinkedPoint ? initialPointId : undefined)
+  const points = linkedPoint.data ? [linkedPoint.data, ...listedPoints] : listedPoints
   const selectedPoint = points.find((point) => point.id === pointId)
   const busy = upload.isPending
 
@@ -91,13 +97,17 @@ export function CsvImportDialog({ onClose, onImported }: CsvImportDialogProps) {
               {points.map((point) => <option key={point.id} value={point.id}>{point.name} · {point.address}</option>)}
             </select>
             {pointList.isPending && <output className="text-small text-ink-2">Загружаем точки…</output>}
-            {pointList.isError && points.length === 0 && (
+            {linkedPoint.isLoading && <output className="text-small text-ink-2">Загружаем точку по ссылке…</output>}
+            {linkedPoint.isError && (
+              <p role="alert" className="text-small text-neg-ink">Не удалось загрузить точку по ссылке. Можно выбрать другую точку.</p>
+            )}
+            {pointList.isError && listedPoints.length === 0 && (
               <div className="flex flex-wrap items-center gap-2">
                 <p role="alert" className="text-small text-neg-ink">Не удалось загрузить точки. {pointList.error.message}</p>
                 <button type="button" className={buttonClass({ size: 's' })} onClick={() => void pointList.refetch()}>Повторить</button>
               </div>
             )}
-            {pointList.isSuccess && points.length === 0 && (
+            {pointList.isSuccess && !linkedPoint.isLoading && points.length === 0 && (
               <p className="text-small text-ink-2">
                 Сначала добавьте точку на экране <Link to={paths.points} className="font-medium text-ink underline">«Точки»</Link>.
               </p>

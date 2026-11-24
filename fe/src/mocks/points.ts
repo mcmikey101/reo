@@ -89,6 +89,10 @@ export function pointHandlers(storage?: Storage) {
         .sort((a, b) => a.name.localeCompare(b.name, 'ru') || a.id.localeCompare(b.id))
       return HttpResponse.json({ items: filtered.slice(offset, offset + limit), total: filtered.length, limit, offset })
     }),
+    http.get(`${pointsUrl}/:id`, ({ params }) => {
+      const point = points.find(({ id }) => id === params.id)
+      return point ? HttpResponse.json(point) : notFound()
+    }),
     http.post(pointsUrl, ({ request }) => save(request)),
     http.patch(`${pointsUrl}/:id`, ({ params, request }) => {
       const point = points.find(({ id }) => id === params.id)

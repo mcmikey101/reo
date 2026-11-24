@@ -34,7 +34,7 @@ function isRowError(value: unknown): value is CsvRowError {
     typeof code === 'string' && typeof message === 'string'
 }
 
-function isImportResult(value: unknown): value is CsvImportResult {
+export function isImportResult(value: unknown): value is CsvImportResult {
   if (!value || typeof value !== 'object') return false
   const { import_id, point_id, source_id, total, imported, duplicates, rejected, errors } = value as Partial<CsvImportResult>
   return typeof import_id === 'string' && import_id.length > 0 &&

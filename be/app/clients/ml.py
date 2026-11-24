@@ -8,6 +8,8 @@ from uuid import UUID
 import httpx
 from pydantic import BaseModel, Field, ValidationError
 
+from app.schemas.health import MlStatus
+
 # ML пакует тексты по длине самого длинного, поэтому для CPU берём запас от лимита 256.
 SENTIMENT_BATCH_SIZE = 32
 SENTIMENT_PADDED_TEXT_BUDGET = 8_192
@@ -114,12 +116,17 @@ def _post_sentiment(
         raise SentimentError("ml_invalid_response") from exc
 
 
-async def get_health(base_url: str, timeout: float) -> bool:
-    """True, если ML-сервис ответил 200 и {"status": "ok"}."""
+async def get_health(base_url: str, timeout: float) -> MlStatus:
+    """Проверить готовность модели, включая штатную загрузку весов."""
     # ML — внутренний сервис: прокси из HTTP(S)_PROXY к нему не применяем
     async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
-        response = await client.get(f"{base_url}/health")
-    if response.status_code != 200:
-        return False
+        response = await client.get(f"{base_url}/v1/health")
+    if response.status_code not in (200, 503):
+        return "error"
     body = response.json()
-    return isinstance(body, dict) and body.get("status") == "ok"
+    status = body.get("status") if isinstance(body, dict) else None
+    if response.status_code == 200 and status == "ok":
+        return "ok"
+    if response.status_code == 503 and status == "loading":
+        return "loading"
+    return "error"

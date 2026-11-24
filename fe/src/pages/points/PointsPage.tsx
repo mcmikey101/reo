@@ -1,3 +1,4 @@
+import { useQueryClient } from '@tanstack/react-query'
 import { CircleAlert, CircleCheck, LoaderCircle, MapPin, Plus, Search, X } from 'lucide-react'
 import { useDeferredValue, useState } from 'react'
 import { Link } from 'react-router'
@@ -7,6 +8,7 @@ import { buttonClass } from '../../components/button'
 import { EmptyState } from '../../components/EmptyState'
 import { PageHeader } from '../../components/PageHeader'
 import { paths } from '../../paths'
+import { clearLastImportReport } from '../../state/lastImportReport'
 import { PointDialog } from './PointDialog'
 import { PointForm } from './PointForm'
 import { PointsList } from './PointsList'
@@ -14,7 +16,8 @@ import { PointsList } from './PointsList'
 type PointAction = { kind: 'add' } | { kind: 'edit' | 'delete'; point: Point }
 
 function DeletePointDialog({ point, onDismiss, onDeleted }: { point: Point; onDismiss: () => void; onDeleted: () => void }) {
-  const mutation = useDeletePoint()
+  const client = useQueryClient()
+  const mutation = useDeletePoint((id) => clearLastImportReport(client, 'point_id', id))
 
   return (
     <PointDialog

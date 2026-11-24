@@ -8,7 +8,7 @@ export const healthyResponse: HealthResponse = { status: 'ok', db: 'ok', ml: 'ok
 
 /**
  * Состояние /health в режиме моков задаётся параметром в адресе страницы:
- * ?health=db-error | ml-error | down. Без параметра всё работает.
+ * ?health=db-error | ml-loading | ml-error | down. Без параметра всё работает.
  */
 function healthScenario(): string | null {
   if (typeof window === 'undefined') return null
@@ -22,6 +22,8 @@ export const handlers = [
         return HttpResponse.error()
       case 'db-error':
         return HttpResponse.json<HealthResponse>({ ...healthyResponse, db: 'error' })
+      case 'ml-loading':
+        return HttpResponse.json<HealthResponse>({ ...healthyResponse, ml: 'loading' })
       case 'ml-error':
         return HttpResponse.json<HealthResponse>({ ...healthyResponse, ml: 'error' })
       default:

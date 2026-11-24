@@ -107,7 +107,7 @@ export function useSavePoint() {
   })
 }
 
-export function useDeletePoint() {
+export function useDeletePoint(onDeleted: (id: string) => void) {
   const client = useQueryClient()
   return useMutation({
     mutationFn: async (id: string) => {
@@ -118,6 +118,7 @@ export function useDeletePoint() {
       }
     },
     onSuccess: async (_, id) => {
+      onDeleted(id)
       await client.cancelQueries({ queryKey: pointsKey })
       client.removeQueries({ queryKey: pointKey(id), exact: true })
       client.setQueriesData<InfiniteData<PointList>>({ queryKey: pointListsKey }, (data) => {

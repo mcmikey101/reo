@@ -9,7 +9,7 @@ from starlette.concurrency import run_in_threadpool
 from app.clients import ml as ml_client
 from app.config import get_settings
 from app.db import get_engine
-from app.schemas.health import HealthResponse, PartStatus
+from app.schemas.health import HealthResponse, MlStatus, PartStatus
 
 logger = logging.getLogger(__name__)
 
@@ -24,17 +24,16 @@ def check_db() -> PartStatus:
     return "ok"
 
 
-async def check_ml() -> PartStatus:
+async def check_ml() -> MlStatus:
     settings = get_settings()
     try:
-        healthy = await ml_client.get_health(settings.ml_url, settings.health_timeout)
+        status = await ml_client.get_health(settings.ml_url, settings.health_timeout)
     except Exception as exc:  # таймаут, отказ соединения, неверный JSON
         logger.warning("Проверка ML не прошла: %r", exc)
         return "error"
-    if not healthy:
-        logger.warning("ML-сервис ответил, но не {'status': 'ok'}")
-        return "error"
-    return "ok"
+    if status == "error":
+        logger.warning("ML-сервис не подтвердил готовность модели")
+    return status
 
 
 async def get_health() -> HealthResponse:

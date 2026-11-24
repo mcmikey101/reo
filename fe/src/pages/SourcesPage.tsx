@@ -1,3 +1,4 @@
+import { useQueryClient } from '@tanstack/react-query'
 import { Plug, Upload } from 'lucide-react'
 import { useState } from 'react'
 import { useSearchParams } from 'react-router'
@@ -5,15 +6,18 @@ import { useSearchParams } from 'react-router'
 import { buttonClass } from '../components/button'
 import { EmptyState } from '../components/EmptyState'
 import { PageHeader } from '../components/PageHeader'
+import { saveLastImportReport, useLastImportReport } from '../state/lastImportReport'
 import { CsvImportDialog } from './sources/CsvImportDialog'
-import { CsvImportReport, type CsvReport } from './sources/CsvImportReport'
+import { CsvImportReport } from './sources/CsvImportReport'
 
 /** M2. Источники — docs/screens.md */
 export function SourcesPage() {
+  const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
   const linkedPointId = searchParams.get('point_id') || undefined
   const [importOpen, setImportOpen] = useState(false)
-  const [report, setReport] = useState<CsvReport | null>(null)
+  const { data: report } = useLastImportReport()
+  const [restored, setRestored] = useState(() => Boolean(report))
 
   function closeImport() {
     setImportOpen(false)
@@ -37,7 +41,7 @@ export function SourcesPage() {
         }
       />
       {report
-        ? <CsvImportReport key={report.result.import_id} report={report} />
+        ? <CsvImportReport key={report.result.import_id} report={report} restored={restored} />
         : <EmptyState icon={Plug} title="Импорт отзывов" text="Загрузите отзывы из CSV для одной из ваших точек." />}
       {(importOpen || linkedPointId) && (
         <CsvImportDialog
@@ -45,7 +49,8 @@ export function SourcesPage() {
           initialPointId={linkedPointId}
           onClose={closeImport}
           onImported={(nextReport) => {
-            setReport(nextReport)
+            saveLastImportReport(queryClient, nextReport)
+            setRestored(false)
             closeImport()
           }}
         />

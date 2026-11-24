@@ -1,18 +1,13 @@
 import { CircleCheck, TriangleAlert } from 'lucide-react'
 import { useLayoutEffect, useRef, useState } from 'react'
 
-import type { CsvImportResult } from '../../api/csvImport'
 import { buttonClass } from '../../components/button'
+import type { CsvReport } from '../../state/lastImportReport'
+import { ImportAnalysisPanel } from './ImportAnalysisPanel'
 
 const ERROR_PAGE_SIZE = 50
 
-export interface CsvReport {
-  result: CsvImportResult
-  pointName: string
-  fileName: string
-}
-
-export function CsvImportReport({ report }: { report: CsvReport }) {
+export function CsvImportReport({ report, restored }: { report: CsvReport; restored: boolean }) {
   const heading = useRef<HTMLHeadingElement>(null)
   const [visibleErrors, setVisibleErrors] = useState(ERROR_PAGE_SIZE)
   const { total, imported, duplicates, rejected, errors } = report.result
@@ -24,7 +19,7 @@ export function CsvImportReport({ report }: { report: CsvReport }) {
   ]
   const StatusIcon = rejected ? TriangleAlert : CircleCheck
 
-  useLayoutEffect(() => { heading.current?.focus() }, [])
+  useLayoutEffect(() => { if (!restored) heading.current?.focus() }, [restored])
 
   return (
     <section aria-labelledby="csv-report-title" className="flex max-w-200 flex-col gap-4 rounded-sheet border border-line bg-surface p-4 sm:p-6">
@@ -71,6 +66,7 @@ export function CsvImportReport({ report }: { report: CsvReport }) {
           )}
         </div>
       )}
+      <ImportAnalysisPanel importId={report.result.import_id} restored={restored} />
     </section>
   )
 }

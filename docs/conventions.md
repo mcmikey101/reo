@@ -71,7 +71,7 @@
 `api` — `GET /health`:
 
 ```json
-{"status": "ok", "db": "ok|error", "ml": "ok|error"}
+{"status": "ok", "db": "ok|error", "ml": "ok|loading|error"}
 ```
 
 `ml` — `GET /health`:
@@ -80,7 +80,9 @@
 {"status": "ok"}
 ```
 
-Ответ `api` используется для индикатора «API · БД · ML» на фронте.
+Ответ `api` используется для индикатора «API · БД · ML» на фронте. Для поля `ml`
+бэкенд проверяет `GET /v1/health` ML-сервиса: `ok` — модель готова,
+`loading` — загружается, `error` — модель или сервис недоступны.
 
 ## 8. CORS
 

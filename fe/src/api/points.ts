@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useMutation, useQueryClient, type InfiniteData } from '@tanstack/react-query'
+import { skipToken, useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData } from '@tanstack/react-query'
 
 import { ApiError, apiGet, apiRequest } from './client'
 
@@ -23,7 +23,9 @@ interface PointList {
   offset: number
 }
 
-const pointsKey = ['points'] as const
+export const pointsKey = ['points'] as const
+const pointListsKey = [...pointsKey, 'list'] as const
+const pointKey = (id: string | undefined) => [...pointsKey, 'detail', id] as const
 
 function isPoint(value: unknown): value is Point {
   if (typeof value !== 'object' || !value) return false
@@ -40,11 +42,20 @@ function isPoint(value: unknown): value is Point {
   )
 }
 
+function parsePoint(value: unknown): Point {
+  if (!isPoint(value)) {
+    throw new ApiError('API вернул точку в неожиданном формате', { kind: 'parse' })
+  }
+  return value
+}
+
 function parsePointList(value: unknown): PointList {
   if (typeof value === 'object' && value) {
     const { items, total, limit, offset } = value as Partial<PointList>
-    if (Array.isArray(items) && items.every(isPoint) && typeof total === 'number' &&
-        typeof limit === 'number' && typeof offset === 'number') {
+    if (Array.isArray(items) && items.every(isPoint) &&
+        typeof total === 'number' && Number.isSafeInteger(total) && total >= 0 &&
+        typeof limit === 'number' && Number.isSafeInteger(limit) && limit > 0 &&
+        typeof offset === 'number' && Number.isSafeInteger(offset) && offset >= 0) {
       return { items, total, limit, offset }
     }
   }
@@ -53,7 +64,7 @@ function parsePointList(value: unknown): PointList {
 
 export function usePoints(query: string) {
   return useInfiniteQuery({
-    queryKey: [...pointsKey, query],
+    queryKey: [...pointListsKey, query],
     initialPageParam: 0,
     queryFn: async ({ signal, pageParam }) => {
       const params = new URLSearchParams({ limit: '50', offset: String(pageParam) })
@@ -62,6 +73,16 @@ export function usePoints(query: string) {
     },
     getNextPageParam: ({ offset, limit, total, items }) =>
       items.length && offset + limit < total ? offset + limit : undefined,
+    retry: false,
+  })
+}
+
+export function usePoint(id?: string) {
+  return useQuery({
+    queryKey: pointKey(id),
+    queryFn: id
+      ? async ({ signal }) => parsePoint(await apiGet(`/points/${encodeURIComponent(id)}`, { signal }))
+      : skipToken,
     retry: false,
   })
 }
@@ -80,10 +101,7 @@ export function useSavePoint() {
         method: pointId ? 'PATCH' : 'POST',
         body: input,
       })
-      if (!isPoint(result)) {
-        throw new ApiError('API вернул точку в неожиданном формате', { kind: 'parse' })
-      }
-      return result
+      return parsePoint(result)
     },
     onSuccess: () => { void client.invalidateQueries({ queryKey: pointsKey }) },
   })
@@ -101,7 +119,8 @@ export function useDeletePoint() {
     },
     onSuccess: async (_, id) => {
       await client.cancelQueries({ queryKey: pointsKey })
-      client.setQueriesData<InfiniteData<PointList>>({ queryKey: pointsKey }, (data) => {
+      client.removeQueries({ queryKey: pointKey(id), exact: true })
+      client.setQueriesData<InfiniteData<PointList>>({ queryKey: pointListsKey }, (data) => {
         if (!data?.pages.some(({ items }) => items.some((point) => point.id === id))) return data
         return {
           ...data,

@@ -60,14 +60,15 @@ interface ApiRequestOptions extends RequestOptions {
 
 export async function apiRequest(path: string, options: ApiRequestOptions): Promise<unknown> {
   const timeout = AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS)
+  const headers = new Headers({ Accept: 'application/json' })
+  const { body } = options
+  if (body && !(body instanceof FormData)) headers.set('Content-Type', 'application/json')
   let response: Response
   try {
     response = await fetch(API_URL + path, {
       method: options.method,
-      headers: options.body
-        ? { Accept: 'application/json', 'Content-Type': 'application/json' }
-        : { Accept: 'application/json' },
-      body: options.body ? JSON.stringify(options.body) : undefined,
+      headers,
+      body: body instanceof FormData ? body : JSON.stringify(body),
       signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout,
     })
   } catch (cause) {

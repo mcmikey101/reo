@@ -13,7 +13,7 @@ interface SidebarProps {
 /** Общий вид пункта меню: высота 38 px, иконка 18 px, отступы по макету */
 function itemClass(active: boolean, collapsed: boolean): string {
   return cx(
-    'relative flex h-9.5 w-full cursor-pointer items-center gap-2.5 rounded-ctl text-body transition-colors',
+    'relative flex h-9.5 w-full cursor-pointer items-center gap-2.5 rounded-ctl text-body transition-colors max-sm:justify-center',
     collapsed ? 'justify-center' : 'px-2.5',
     active ? 'bg-nav-active font-semibold text-ink' : 'text-ink-2 hover:bg-hover hover:text-ink',
   )
@@ -31,7 +31,7 @@ function SidebarLink({ item, collapsed }: { item: NavItem; collapsed: boolean })
         <>
           {isActive && <span aria-hidden className="absolute top-2.25 -left-3 h-5 w-0.75 rounded-r-[3px] bg-ink" />}
           <Icon aria-hidden className="size-4.5 shrink-0" strokeWidth={1.75} />
-          <span className={collapsed ? 'sr-only' : 'truncate'}>{item.label}</span>
+          <span className={collapsed ? 'sr-only' : 'truncate max-sm:sr-only'}>{item.label}</span>
         </>
       )}
     </NavLink>
@@ -45,7 +45,7 @@ function SidebarGroup({ group, collapsed }: { group: NavGroup; collapsed: boolea
       {/* Высота строки сохраняется и в свёрнутом меню, чтобы иконки не прыгали */}
       <div className="flex h-5.5 items-start justify-center px-2.5">
         {collapsed && <span aria-hidden className="mt-2 h-px w-4 bg-line" />}
-        <span id={titleId} className={collapsed ? 'sr-only' : 'w-full text-caption text-ink-3'}>
+        <span id={titleId} className={collapsed ? 'sr-only' : 'w-full text-caption text-ink-3 max-sm:sr-only'}>
           {group.title}
         </span>
       </div>
@@ -69,7 +69,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     <aside
       id="sidebar"
       className={cx(
-        'sticky top-14 h-[calc(100dvh-3.5rem)] shrink-0 overflow-x-hidden overflow-y-auto border-r border-line bg-surface px-3 py-4 whitespace-nowrap transition-[width] duration-150 motion-reduce:transition-none',
+        'sticky top-14 h-[calc(100dvh-3.5rem)] shrink-0 overflow-x-hidden overflow-y-auto border-r border-line bg-surface px-3 py-4 whitespace-nowrap transition-[width] duration-150 motion-reduce:transition-none max-sm:w-16',
         collapsed ? 'w-16' : 'w-58',
       )}
     >
@@ -88,7 +88,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             aria-expanded={!collapsed}
             aria-controls="sidebar"
             title={collapsed ? toggleLabel : undefined}
-            className={itemClass(false, collapsed)}
+            className={cx(itemClass(false, collapsed), 'max-sm:hidden')}
           >
             <ToggleIcon aria-hidden className="size-4.5 shrink-0" strokeWidth={1.75} />
             <span className={collapsed ? 'sr-only' : 'truncate'}>{toggleLabel}</span>

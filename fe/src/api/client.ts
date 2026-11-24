@@ -49,12 +49,25 @@ interface RequestOptions {
 }
 
 /** GET-запрос к API. Возвращает разобранный JSON или бросает ApiError. */
-export async function apiGet(path: string, options: RequestOptions = {}): Promise<unknown> {
+export function apiGet(path: string, options?: RequestOptions): Promise<unknown> {
+  return apiRequest(path, { ...options, method: 'GET' })
+}
+
+interface ApiRequestOptions extends RequestOptions {
+  method: 'GET' | 'POST' | 'PATCH' | 'DELETE'
+  body?: object
+}
+
+export async function apiRequest(path: string, options: ApiRequestOptions): Promise<unknown> {
   const timeout = AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS)
   let response: Response
   try {
     response = await fetch(API_URL + path, {
-      headers: { Accept: 'application/json' },
+      method: options.method,
+      headers: options.body
+        ? { Accept: 'application/json', 'Content-Type': 'application/json' }
+        : { Accept: 'application/json' },
+      body: options.body ? JSON.stringify(options.body) : undefined,
       signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout,
     })
   } catch (cause) {
@@ -63,6 +76,7 @@ export async function apiGet(path: string, options: RequestOptions = {}): Promis
   }
 
   if (!response.ok) throw await toHttpError(response)
+  if (options.method === 'DELETE' && response.status === 204) return
 
   try {
     return await response.json()

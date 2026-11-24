@@ -4,4 +4,4 @@ import { setupWorker } from 'msw/browser'
 import { handlers } from './handlers'
 import { pointHandlers } from './points'
 
-export const worker = setupWorker(...handlers, ...pointHandlers(window.localStorage))
+export const worker = setupWorker(...handlers, ...pointHandlers(window.localStorage, window.sessionStorage))

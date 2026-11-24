@@ -32,7 +32,26 @@ export const demoImportResult: CsvImportResult = {
   }],
 }
 
-const mockImports = new Map<string, { startedAt?: number }>()
+interface MockImport {
+  pointId: string
+  startedAt?: number
+}
+
+const importStorageKey = (importId: string) => `reo.mock.csv-import:${API_URL}:${importId}`
+
+function readStoredImport(storage: Storage | undefined, importId: string): MockImport | undefined {
+  try {
+    const raw = storage?.getItem(importStorageKey(importId))
+    if (!raw) return
+    const entry = JSON.parse(raw) as Partial<MockImport> | null
+    if (entry && typeof entry.pointId === 'string' &&
+        (entry.startedAt === undefined || Number.isFinite(entry.startedAt))) {
+      return { pointId: entry.pointId, startedAt: entry.startedAt }
+    }
+  } catch {
+    // Повреждённая запись не считается импортом.
+  }
+}
 
 function mockAnalysis(importId: string, startedAt?: number): ImportAnalysis {
   if (startedAt === undefined) return { import_id: importId, status: 'pending', result: null, error: null }
@@ -45,39 +64,52 @@ function mockAnalysis(importId: string, startedAt?: number): ImportAnalysis {
   }
 }
 
-function mockAnalysisResponse(importId: string, start: boolean) {
-  const entry = mockImports.get(importId)
-  if (!entry) {
-    return HttpResponse.json({ error: { code: 'not_found', message: 'Импорт не найден', details: null } }, { status: 404 })
+export function csvImportHandlers(hasPoint: (id: string) => boolean, storage?: Storage) {
+  const imports = new Map<string, MockImport>()
+
+  function rememberImport(importId: string, entry: MockImport) {
+    imports.set(importId, entry)
+    try {
+      storage?.setItem(importStorageKey(importId), JSON.stringify(entry))
+    } catch {
+      // При недоступном хранилище мок работает до обновления страницы.
+    }
   }
-  if (start) entry.startedAt ??= Date.now()
-  const analysis = mockAnalysis(importId, entry.startedAt)
-  return HttpResponse.json(analysis, { status: start && analysis.status === 'running' ? 202 : 200 })
-}
 
-export function csvImportHandler(hasPoint: (id: string) => boolean) {
-  return http.post(`${API_URL}/imports/csv`, async ({ request }) => {
-    const body = await request.formData()
-    const pointId = body.get('point_id')
-    if (typeof pointId !== 'string' || !hasPoint(pointId)) {
-      return HttpResponse.json({ error: { code: 'not_found', message: 'Точка не найдена', details: null } }, { status: 404 })
+  function analysisResponse(importId: string, start: boolean) {
+    const entry = imports.get(importId) ?? readStoredImport(storage, importId)
+    if (!entry || !hasPoint(entry.pointId)) {
+      return HttpResponse.json({ error: { code: 'not_found', message: 'Импорт не найден', details: null } }, { status: 404 })
     }
-    const file = body.get('file')
-    if (!file || typeof file === 'string') {
-      return HttpResponse.json({ error: { code: 'validation_error', message: 'Выберите CSV-файл', details: null } }, { status: 422 })
+    if (start && entry.startedAt === undefined) {
+      entry.startedAt = Date.now()
+      rememberImport(importId, entry)
     }
-    // Ответ из примера в docs/api-contract.md для просмотра штатного отчёта.
-    const importId = crypto.randomUUID()
-    mockImports.set(importId, {})
-    return HttpResponse.json({ ...demoImportResult, point_id: pointId, import_id: importId }, { status: 201 })
-  })
-}
+    const analysis = mockAnalysis(importId, entry.startedAt)
+    return HttpResponse.json(analysis, { status: start && analysis.status === 'running' ? 202 : 200 })
+  }
 
-export const importAnalysisHandlers = [
-  http.post<{ importId: string }>(`${API_URL}/imports/:importId/analysis`, ({ params }) =>
-    mockAnalysisResponse(params.importId, true),
-  ),
-  http.get<{ importId: string }>(`${API_URL}/imports/:importId/analysis`, ({ params }) =>
-    mockAnalysisResponse(params.importId, false),
-  ),
-]
+  return [
+    http.post(`${API_URL}/imports/csv`, async ({ request }) => {
+      const body = await request.formData()
+      const pointId = body.get('point_id')
+      if (typeof pointId !== 'string' || !hasPoint(pointId)) {
+        return HttpResponse.json({ error: { code: 'not_found', message: 'Точка не найдена', details: null } }, { status: 404 })
+      }
+      const file = body.get('file')
+      if (!file || typeof file === 'string') {
+        return HttpResponse.json({ error: { code: 'validation_error', message: 'Выберите CSV-файл', details: null } }, { status: 422 })
+      }
+      // Ответ из примера в docs/api-contract.md для просмотра штатного отчёта.
+      const importId = crypto.randomUUID()
+      rememberImport(importId, { pointId })
+      return HttpResponse.json({ ...demoImportResult, point_id: pointId, import_id: importId }, { status: 201 })
+    }),
+    http.post<{ importId: string }>(`${API_URL}/imports/:importId/analysis`, ({ params }) =>
+      analysisResponse(params.importId, true),
+    ),
+    http.get<{ importId: string }>(`${API_URL}/imports/:importId/analysis`, ({ params }) =>
+      analysisResponse(params.importId, false),
+    ),
+  ]
+}

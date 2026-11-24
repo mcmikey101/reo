@@ -5,12 +5,13 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { API_URL } from '../../api/client'
 import type { ImportAnalysis } from '../../api/importAnalysis'
-import { demoImportPoint, demoImportResult } from '../../mocks/csvImport'
+import { csvImportHandlers, demoImportPoint, demoImportResult } from '../../mocks/csvImport'
 import { server } from '../../mocks/node'
 import { renderApp } from '../../test/render'
 
 const importId = demoImportResult.import_id
 const analysisUrl = `${API_URL}/imports/${importId}/analysis`
+const pending = { import_id: importId, status: 'pending', result: null, error: null } satisfies ImportAnalysis
 const running = { import_id: importId, status: 'running', result: null, error: null } satisfies ImportAnalysis
 const done = {
   import_id: importId,
@@ -144,10 +145,20 @@ describe('Анализ CSV-импорта', () => {
     expect(screen.getByRole('button', { name: 'Запустить анализ' })).toBeEnabled()
   })
 
-  it('показывает, что данных недостаточно, если импорт не добавил отзывы', async () => {
-    await openImportReport({ ...demoImportResult, imported: 0, duplicates: 3 })
-    expect(await screen.findByText(/Недостаточно данных/)).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Запустить анализ' })).not.toBeInTheDocument()
+  it('запрашивает анализ импорта одних дублей и показывает нулевое распределение', async () => {
+    const start = vi.fn<() => Response>(() => HttpResponse.json({
+      ...done,
+      result: { sentiment_counts: { positive: 0, neutral: 0, negative: 0 }, satisfaction_index: null },
+    }))
+    server.use(http.post(analysisUrl, start))
+    const user = await openImportReport({ ...demoImportResult, imported: 0, duplicates: 3 })
+    await user.click(await screen.findByRole('button', { name: 'Запустить анализ' }))
+
+    expect(await screen.findByText('Недостаточно данных')).toBeInTheDocument()
+    for (const label of ['Позитивные', 'Нейтральные', 'Негативные']) {
+      expect(screen.getByText(label).nextElementSibling).toHaveTextContent('0')
+    }
+    expect(start).toHaveBeenCalledTimes(1)
   })
 
   it('сохраняет отчёт при переходе и восстанавливает состояние анализа после обновления', async () => {
@@ -175,6 +186,125 @@ describe('Анализ CSV-импорта', () => {
     expect(await screen.findByText('62,5')).toBeInTheDocument()
     expect(status).toHaveBeenCalledTimes(1)
     expect(start).toHaveBeenCalledTimes(1)
+  })
+
+  it('продолжает опрос, если GET при возврате запоздал с ответом pending', async () => {
+    let releaseStart!: () => void
+    let releaseStatus!: () => void
+    const startResponse = new Promise<void>((resolve) => { releaseStart = resolve })
+    const statusResponse = new Promise<void>((resolve) => { releaseStatus = resolve })
+    const start = vi.fn<() => Promise<Response>>(async () => {
+      await startResponse
+      return HttpResponse.json(running, { status: 202 })
+    })
+    const status = vi.fn<() => Promise<Response>>()
+      .mockImplementationOnce(async () => {
+        await statusResponse
+        return HttpResponse.json(pending)
+      })
+      .mockImplementation(async () => HttpResponse.json(done))
+    server.use(http.post(analysisUrl, start), http.get(analysisUrl, status))
+    const user = await openImportReport()
+    try {
+      await user.click(await screen.findByRole('button', { name: 'Запустить анализ' }))
+      await waitFor(() => expect(start).toHaveBeenCalledTimes(1))
+      await user.click(screen.getByRole('link', { name: 'Точки' }))
+      await screen.findByRole('heading', { name: 'Точки' })
+      await user.click(screen.getByRole('link', { name: 'Источники' }))
+      await waitFor(() => expect(status).toHaveBeenCalledTimes(1))
+
+      releaseStart()
+      expect(await screen.findByText('Анализ выполняется…')).toBeInTheDocument()
+      releaseStatus()
+      expect(await screen.findByText('62,5', {}, { timeout: 4_000 })).toBeInTheDocument()
+      expect(status).toHaveBeenCalledTimes(2)
+    } finally {
+      releaseStart()
+      releaseStatus()
+    }
+  }, 8_000)
+
+  it('удаляет отчёт из кеша и хранилища при удалении его точки', async () => {
+    let deleted = false
+    server.use(
+      http.get(`${API_URL}/points`, () => {
+        const items = deleted ? [] : [demoImportPoint]
+        return HttpResponse.json({ items, total: items.length, limit: 50, offset: 0 })
+      }),
+      http.delete(`${API_URL}/points/${demoImportPoint.id}`, () => {
+        deleted = true
+        return new HttpResponse(null, { status: 204 })
+      }),
+      http.post(`${API_URL}/imports/csv`, () => HttpResponse.json(demoImportResult, { status: 201 })),
+      http.post(analysisUrl, () => HttpResponse.json(done)),
+    )
+    const user = userEvent.setup()
+    const page = renderApp('/sources')
+    await uploadCsv(user)
+    await user.click(await screen.findByRole('button', { name: 'Запустить анализ' }))
+    expect(await screen.findByText('62,5')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('link', { name: 'Точки' }))
+    await user.click(await screen.findByRole('button', { name: 'Действия для точки «Зерно на Тверской»' }))
+    await user.click(screen.getByRole('button', { name: 'Удалить' }))
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Удалить точку' }))
+    await screen.findByRole('heading', { name: 'Точек пока нет' })
+
+    await user.click(screen.getByRole('link', { name: 'Источники' }))
+    expect(await screen.findByRole('heading', { name: 'Импорт отзывов' })).toBeInTheDocument()
+    page.unmount()
+    renderApp('/sources')
+    expect(await screen.findByRole('heading', { name: 'Импорт отзывов' })).toBeInTheDocument()
+  })
+
+  it('удаляет сохранённый отчёт, если API больше не находит импорт', async () => {
+    const status = vi.fn<() => Response>(() => HttpResponse.json({
+      error: { code: 'not_found', message: 'Импорт не найден', details: null },
+    }, { status: 404 }))
+    server.use(
+      http.post(`${API_URL}/imports/csv`, () => HttpResponse.json(demoImportResult, { status: 201 })),
+      http.get(analysisUrl, status),
+    )
+    const user = userEvent.setup()
+    const page = renderApp('/sources')
+    await uploadCsv(user)
+    expect(await screen.findByText(/reviews\.csv/)).toBeInTheDocument()
+    page.unmount()
+
+    const reloaded = renderApp('/sources')
+    expect(await screen.findByRole('heading', { name: 'Импорт отзывов' })).toBeInTheDocument()
+    reloaded.unmount()
+    renderApp('/sources')
+    expect(await screen.findByRole('heading', { name: 'Импорт отзывов' })).toBeInTheDocument()
+    expect(status).toHaveBeenCalledTimes(1)
+  })
+
+  it('восстанавливает запущенный мок-анализ при повторном создании обработчиков', async () => {
+    const hasPoint = (id: string) => id === demoImportPoint.id
+    server.use(...csvImportHandlers(hasPoint, sessionStorage))
+    const form = new FormData()
+    form.set('point_id', demoImportPoint.id)
+    form.set('file', new File(['date,text\n2026-11-20,Хороший кофе'], 'reviews.csv', { type: 'text/csv' }))
+    // Подменяем разбор multipart из-за разных реализаций File в Node и jsdom.
+    const decode = vi.spyOn(Request.prototype, 'formData').mockResolvedValueOnce(form)
+    const now = vi.spyOn(Date, 'now').mockReturnValue(10_000)
+    try {
+      const upload = await fetch(`${API_URL}/imports/csv`, { method: 'POST' })
+      expect(upload.status).toBe(201)
+      const { import_id: id } = await upload.json() as { import_id: string }
+      const url = `${API_URL}/imports/${id}/analysis`
+      expect((await fetch(url, { method: 'POST' })).status).toBe(202)
+
+      server.use(...csvImportHandlers(hasPoint, sessionStorage))
+      const restored = await fetch(url)
+      expect(restored.status).toBe(200)
+      expect(await restored.json()).toMatchObject({ import_id: id, status: 'running' })
+      now.mockReturnValue(13_000)
+      expect(await (await fetch(url)).json()).toMatchObject({ import_id: id, status: 'done' })
+    } finally {
+      decode.mockRestore()
+      now.mockRestore()
+    }
   })
 
   it('не переносит результат запущенного анализа в отчёт нового импорта', async () => {

@@ -1,5 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect } from 'react'
 
+import { clearLastImportReport } from '../state/lastImportReport'
 import { ApiError, apiGet, apiRequest } from './client'
 
 interface AnalysisResult {
@@ -81,9 +83,20 @@ export function useImportAnalysis(importId: string, restored: boolean) {
 
   const start = useMutation({
     mutationFn: async () => parseAnalysis(await apiRequest(path, { method: 'POST' }), importId),
-    onSuccess: (data) => { client.setQueryData(queryKey, data) },
+    onSuccess: async (data) => {
+      // GET, начатый при возврате к отчёту, может принести статус до запуска.
+      await client.cancelQueries({ queryKey, exact: true })
+      client.setQueryData(queryKey, data)
+    },
     retry: false,
   })
+
+  const error = status.error ?? start.error
+  useEffect(() => {
+    if (error instanceof ApiError && error.status === 404) {
+      clearLastImportReport(client, 'import_id', importId)
+    }
+  }, [client, error, importId])
 
   return { status, start }
 }

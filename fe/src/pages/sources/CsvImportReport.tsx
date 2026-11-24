@@ -1,17 +1,11 @@
 import { CircleCheck, TriangleAlert } from 'lucide-react'
 import { useLayoutEffect, useRef, useState } from 'react'
 
-import type { CsvImportResult } from '../../api/csvImport'
 import { buttonClass } from '../../components/button'
+import type { CsvReport } from '../../state/lastImportReport'
 import { ImportAnalysisPanel } from './ImportAnalysisPanel'
 
 const ERROR_PAGE_SIZE = 50
-
-export interface CsvReport {
-  result: CsvImportResult
-  pointName: string
-  fileName: string
-}
 
 export function CsvImportReport({ report, restored }: { report: CsvReport; restored: boolean }) {
   const heading = useRef<HTMLHeadingElement>(null)
@@ -72,12 +66,7 @@ export function CsvImportReport({ report, restored }: { report: CsvReport; resto
           )}
         </div>
       )}
-      {imported > 0 ? <ImportAnalysisPanel importId={report.result.import_id} restored={restored} /> : (
-        <div className="border-t border-line pt-4">
-          <h3 className="text-widget">Анализ отзывов</h3>
-          <p className="mt-1 text-small text-ink-2">Недостаточно данных. Этот импорт не добавил новых отзывов.</p>
-        </div>
-      )}
+      <ImportAnalysisPanel importId={report.result.import_id} restored={restored} />
     </section>
   )
 }

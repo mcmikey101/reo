@@ -6,9 +6,9 @@ import { useSearchParams } from 'react-router'
 import { buttonClass } from '../components/button'
 import { EmptyState } from '../components/EmptyState'
 import { PageHeader } from '../components/PageHeader'
+import { saveLastImportReport, useLastImportReport } from '../state/lastImportReport'
 import { CsvImportDialog } from './sources/CsvImportDialog'
-import { CsvImportReport, type CsvReport } from './sources/CsvImportReport'
-import { lastImportReportKey, readLastImportReport, saveLastImportReport } from './sources/lastImportReport'
+import { CsvImportReport } from './sources/CsvImportReport'
 
 /** M2. Источники — docs/screens.md */
 export function SourcesPage() {
@@ -16,10 +16,8 @@ export function SourcesPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const linkedPointId = searchParams.get('point_id') || undefined
   const [importOpen, setImportOpen] = useState(false)
-  const [report, setReport] = useState(() =>
-    queryClient.getQueryData<CsvReport>(lastImportReportKey) ?? readLastImportReport(),
-  )
-  const [restored, setRestored] = useState(report !== null)
+  const { data: report } = useLastImportReport()
+  const [restored, setRestored] = useState(() => Boolean(report))
 
   function closeImport() {
     setImportOpen(false)
@@ -51,10 +49,8 @@ export function SourcesPage() {
           initialPointId={linkedPointId}
           onClose={closeImport}
           onImported={(nextReport) => {
-            saveLastImportReport(nextReport)
-            queryClient.setQueryData(lastImportReportKey, nextReport)
+            saveLastImportReport(queryClient, nextReport)
             setRestored(false)
-            setReport(nextReport)
             closeImport()
           }}
         />

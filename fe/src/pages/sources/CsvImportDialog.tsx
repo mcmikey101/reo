@@ -6,7 +6,7 @@ import { MAX_CSV_BYTES, useCsvImport } from '../../api/csvImport'
 import { usePoint, usePoints } from '../../api/points'
 import { buttonClass } from '../../components/button'
 import { paths } from '../../paths'
-import type { CsvReport } from './CsvImportReport'
+import type { CsvReport } from '../../state/lastImportReport'
 
 const CSV_EXAMPLE = 'date,text,rating\n2026-11-20,"Вкусный кофе, быстро обслужили",5\n2026-11-21,Уютное место,'
 

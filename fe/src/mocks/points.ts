@@ -2,7 +2,7 @@ import { http, HttpResponse } from 'msw'
 
 import { API_URL } from '../api/client'
 import type { Point, PointInput } from '../api/points'
-import { csvImportHandler } from './csvImport'
+import { csvImportHandlers } from './csvImport'
 
 const pointsUrl = `${API_URL}/points`
 const storageKey = 'reo.mock.points'
@@ -34,7 +34,7 @@ function validate(input: PointInput | Partial<PointInput>, creating: boolean) {
   }
 }
 
-export function pointHandlers(storage?: Storage) {
+export function pointHandlers(storage?: Storage, importStorage?: Storage) {
   const saved = storage?.getItem(storageKey)
   let points: Point[] = saved ? JSON.parse(saved) as Point[] : storage ? seed : []
 
@@ -78,7 +78,7 @@ export function pointHandlers(storage?: Storage) {
   }
 
   return [
-    csvImportHandler((id) => points.some((point) => point.id === id)),
+    ...csvImportHandlers((id) => points.some((point) => point.id === id), importStorage),
     http.get(pointsUrl, ({ request }) => {
       const params = new URL(request.url).searchParams
       const q = params.get('q')?.trim().toLocaleLowerCase('ru') ?? ''

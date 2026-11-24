@@ -23,7 +23,7 @@ describe('каркас приложения', () => {
     renderApp(path)
 
     expect(await screen.findByRole('heading', { level: 1, name: title })).toBeInTheDocument()
-    expect(screen.getByRole('heading', { level: 2, name: emptyTitle })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { level: 2, name: emptyTitle })).toBeInTheDocument()
   })
 
   it('в интерфейсе название reo, а не «Отклик»', async () => {

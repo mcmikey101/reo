@@ -1,7 +1,7 @@
 import { screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
-import { beforeAll, describe, expect, it, vi } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { API_URL } from '../../api/client'
 import { demoImportPoint, demoImportResult } from '../../mocks/csvImport'
@@ -23,6 +23,12 @@ describe('Импорт CSV', () => {
     // jsdom не реализует императивное открытие нативного <dialog>.
     HTMLDialogElement.prototype.showModal ??= function () { this.open = true }
     HTMLDialogElement.prototype.close ??= function () { this.open = false }
+  })
+
+  beforeEach(() => {
+    server.use(http.get(`${API_URL}/points`, () =>
+      HttpResponse.json({ items: [demoImportPoint], total: 1, limit: 50, offset: 0 }),
+    ))
   })
 
   it('отправляет выбранную точку и файл одним multipart-запросом и показывает ошибки строк', async () => {

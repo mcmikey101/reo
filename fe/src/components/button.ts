@@ -12,6 +12,7 @@ const kinds = {
   primary: 'bg-accent text-white hover:bg-accent-hover',
   secondary: 'border border-input-line bg-surface text-ink hover:bg-hover',
   ghost: 'text-ink-2 hover:bg-hover hover:text-ink',
+  danger: 'bg-neg-ink text-white hover:bg-neg',
 } as const
 
 interface ButtonClassOptions {

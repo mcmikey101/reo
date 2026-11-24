@@ -25,13 +25,11 @@ export const demoImportResult: CsvImportResult = {
   }],
 }
 
-export const csvImportHandlers = [
-  http.get(`${API_URL}/points`, () =>
-    HttpResponse.json({ items: [demoImportPoint], total: 1, limit: 50, offset: 0 }),
-  ),
-  http.post(`${API_URL}/imports/csv`, async ({ request }) => {
+export function csvImportHandler(hasPoint: (id: string) => boolean) {
+  return http.post(`${API_URL}/imports/csv`, async ({ request }) => {
     const body = await request.formData()
-    if (body.get('point_id') !== demoImportPoint.id) {
+    const pointId = body.get('point_id')
+    if (typeof pointId !== 'string' || !hasPoint(pointId)) {
       return HttpResponse.json({ error: { code: 'not_found', message: 'Точка не найдена', details: null } }, { status: 404 })
     }
     const file = body.get('file')
@@ -39,6 +37,6 @@ export const csvImportHandlers = [
       return HttpResponse.json({ error: { code: 'validation_error', message: 'Выберите CSV-файл', details: null } }, { status: 422 })
     }
     // Ответ из примера в docs/api-contract.md для просмотра штатного отчёта.
-    return HttpResponse.json(demoImportResult, { status: 201 })
-  }),
-]
+    return HttpResponse.json({ ...demoImportResult, point_id: pointId }, { status: 201 })
+  })
+}

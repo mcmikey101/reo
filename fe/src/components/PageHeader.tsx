@@ -14,7 +14,7 @@ export function PageHeader({ title, description, actions }: PageHeaderProps) {
   }, [title])
 
   return (
-    <header className="flex items-end justify-between gap-6">
+    <header className="flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
       <div className="flex min-w-0 flex-col gap-1.5">
         <h1 className="text-h1">{title}</h1>
         {description && <p className="text-small text-ink-2">{description}</p>}

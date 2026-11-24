@@ -23,7 +23,7 @@ export function AppLayout() {
       <div className="flex">
         <Sidebar collapsed={collapsed} onToggle={toggle} />
         {/* tabIndex — чтобы ссылка «Перейти к содержимому» переводила сюда фокус */}
-        <main id="main" tabIndex={-1} className="flex min-w-0 flex-1 flex-col gap-4 px-6 pt-6 pb-12 outline-none">
+        <main id="main" tabIndex={-1} className="flex min-w-0 flex-1 flex-col gap-4 px-3 pt-4 pb-12 outline-none sm:px-6 sm:pt-6">
           <Outlet />
         </main>
       </div>

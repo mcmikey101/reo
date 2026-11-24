@@ -3,6 +3,7 @@ import { http, HttpResponse } from 'msw'
 
 import { API_URL } from '../api/client'
 import type { HealthResponse } from '../api/health'
+import { csvImportHandlers } from './csvImport'
 
 export const healthyResponse: HealthResponse = { status: 'ok', db: 'ok', ml: 'ok' }
 
@@ -16,6 +17,7 @@ function healthScenario(): string | null {
 }
 
 export const handlers = [
+  ...csvImportHandlers,
   http.get(`${API_URL}/health`, () => {
     switch (healthScenario()) {
       case 'down':

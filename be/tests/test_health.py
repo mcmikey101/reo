@@ -1,3 +1,4 @@
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -28,6 +29,36 @@ def test_health_ml_unreachable(client: TestClient, monkeypatch: pytest.MonkeyPat
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "db": "ok", "ml": "error"}
+
+
+@pytest.mark.parametrize(
+    ("ml_status_code", "ml_body", "expected"),
+    [
+        (200, {"status": "ok"}, "ok"),
+        (503, {"status": "loading"}, "loading"),
+        (503, {"error": {"code": "internal_error"}}, "error"),
+        (500, {"error": {"code": "internal_error"}}, "error"),
+        (200, {"status": "unknown"}, "error"),
+    ],
+)
+def test_health_reports_model_readiness(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    ml_status_code: int,
+    ml_body: dict,
+    expected: str,
+) -> None:
+    async def get_ml_health(_client: httpx.AsyncClient, url: str) -> httpx.Response:
+        assert url.endswith("/v1/health")
+        return httpx.Response(ml_status_code, json=ml_body)
+
+    monkeypatch.setattr(health_service, "check_db", lambda: "ok")
+    monkeypatch.setattr(httpx.AsyncClient, "get", get_ml_health)
+
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "db": "ok", "ml": expected}
 
 
 def test_health_db_unreachable(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

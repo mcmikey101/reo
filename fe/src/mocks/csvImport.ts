@@ -2,6 +2,7 @@ import { http, HttpResponse } from 'msw'
 
 import { API_URL } from '../api/client'
 import type { CsvImportResult } from '../api/csvImport'
+import type { ImportAnalysis } from '../api/importAnalysis'
 
 export const demoImportPoint = {
   id: 'a0000000-0000-4000-8000-000000000201',
@@ -25,6 +26,29 @@ export const demoImportResult: CsvImportResult = {
   }],
 }
 
+const mockImports = new Map<string, { startedAt?: number }>()
+
+function mockAnalysis(importId: string, startedAt?: number): ImportAnalysis {
+  if (startedAt === undefined) return { import_id: importId, status: 'pending', result: null, error: null }
+  if (Date.now() - startedAt < 2_500) return { import_id: importId, status: 'running', result: null, error: null }
+  return {
+    import_id: importId,
+    status: 'done',
+    result: { sentiment_counts: { positive: 1, neutral: 1, negative: 1 }, satisfaction_index: 58.3 },
+    error: null,
+  }
+}
+
+function mockAnalysisResponse(importId: string, start: boolean) {
+  const entry = mockImports.get(importId)
+  if (!entry) {
+    return HttpResponse.json({ error: { code: 'not_found', message: 'Импорт не найден', details: null } }, { status: 404 })
+  }
+  if (start) entry.startedAt ??= Date.now()
+  const analysis = mockAnalysis(importId, entry.startedAt)
+  return HttpResponse.json(analysis, { status: start && analysis.status === 'running' ? 202 : 200 })
+}
+
 export const csvImportHandlers = [
   http.get(`${API_URL}/points`, () =>
     HttpResponse.json({ items: [demoImportPoint], total: 1, limit: 50, offset: 0 }),
@@ -39,6 +63,14 @@ export const csvImportHandlers = [
       return HttpResponse.json({ error: { code: 'validation_error', message: 'Выберите CSV-файл', details: null } }, { status: 422 })
     }
     // Ответ из примера в docs/api-contract.md для просмотра штатного отчёта.
-    return HttpResponse.json(demoImportResult, { status: 201 })
+    const importId = crypto.randomUUID()
+    mockImports.set(importId, {})
+    return HttpResponse.json({ ...demoImportResult, import_id: importId }, { status: 201 })
   }),
+  http.post<{ importId: string }>(`${API_URL}/imports/:importId/analysis`, ({ params }) =>
+    mockAnalysisResponse(params.importId, true),
+  ),
+  http.get<{ importId: string }>(`${API_URL}/imports/:importId/analysis`, ({ params }) =>
+    mockAnalysisResponse(params.importId, false),
+  ),
 ]

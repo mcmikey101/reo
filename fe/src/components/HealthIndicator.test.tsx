@@ -24,7 +24,7 @@ describe('HealthIndicator', () => {
     await waitForChecked()
 
     expect([statusOf('api'), statusOf('db'), statusOf('ml')]).toEqual(['ok', 'ok', 'ok'])
-    expect(screen.getByRole('button', { name: /API отвечает, БД доступна, ML доступен/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /API отвечает, БД доступна, ML модель готова/ })).toBeInTheDocument()
   })
 
   it('БД недоступна — красная только БД', async () => {
@@ -33,6 +33,22 @@ describe('HealthIndicator', () => {
     await waitForChecked()
 
     expect([statusOf('api'), statusOf('db'), statusOf('ml')]).toEqual(['ok', 'error', 'ok'])
+  })
+
+  it('показывает загрузку модели отдельно от готовности API и БД', async () => {
+    server.use(http.get(healthUrl, () => HttpResponse.json({ status: 'ok', db: 'ok', ml: 'loading' })))
+    renderWithQuery(<HealthIndicator />)
+    await waitForChecked()
+
+    expect([statusOf('api'), statusOf('db'), statusOf('ml')]).toEqual(['ok', 'ok', 'loading'])
+    const button = screen.getByRole('button', { name: /ML модель загружается/ })
+    expect(button.querySelector('[data-part="ml"]')).toHaveClass('text-warn-ink')
+    expect(button.querySelector('[data-part="ml"] svg')).toHaveClass('text-warn-spinner', 'motion-safe:animate-spin')
+
+    server.use(http.get(healthUrl, () => HttpResponse.json({ status: 'ok', db: 'ok', ml: 'error' })))
+    await userEvent.click(button)
+    await waitFor(() => expect(statusOf('ml')).toBe('error'))
+    expect(screen.getByRole('tooltip')).toHaveTextContent('модель недоступна')
   })
 
   it('API недоступен — всё красное, компонент не падает', async () => {

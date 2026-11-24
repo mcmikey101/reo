@@ -1,12 +1,12 @@
-import { CircleCheck, CircleDashed, CircleX, type LucideIcon } from 'lucide-react'
+import { CircleCheck, CircleDashed, CircleX, LoaderCircle, type LucideIcon } from 'lucide-react'
 import { Fragment, useEffect, useId, useState } from 'react'
 
 import { API_URL, ApiError } from '../api/client'
-import { useHealth, type PartStatus } from '../api/health'
+import { useHealth, type MlStatus, type PartStatus } from '../api/health'
 import { cx } from '../lib/cx'
 import { formatTime } from '../lib/format'
 
-type Light = 'pending' | 'ok' | 'error'
+type Light = 'pending' | MlStatus
 type PartKey = 'api' | 'db' | 'ml'
 
 interface PartView {
@@ -22,8 +22,13 @@ const PARTS: { key: PartKey; label: string; name: string }[] = [
 ]
 
 // Состояние различается не только цветом, но и значком (docs/screens.md, «Состояния»)
-const ICONS: Record<Light, LucideIcon> = { pending: CircleDashed, ok: CircleCheck, error: CircleX }
-const COLORS: Record<Light, string> = { pending: 'text-ink-3', ok: 'text-pos-ink', error: 'text-neg-ink' }
+const ICONS: Record<Light, LucideIcon> = { pending: CircleDashed, loading: LoaderCircle, ok: CircleCheck, error: CircleX }
+const COLORS: Record<Light, string> = { pending: 'text-ink-3', loading: 'text-warn-ink', ok: 'text-pos-ink', error: 'text-neg-ink' }
+const ML_STATES: Record<MlStatus, PartView> = {
+  loading: { light: 'loading', text: 'модель загружается' },
+  ok: { light: 'ok', text: 'модель готова' },
+  error: { light: 'error', text: 'модель недоступна' },
+}
 
 function apiProblem(error: Error): string {
   if (!(error instanceof ApiError)) return 'ошибка'
@@ -56,7 +61,7 @@ function describe(health: ReturnType<typeof useHealth>): Record<PartKey, PartVie
   return {
     api: { light: 'ok', text: 'отвечает' },
     db: fromStatus(health.data.db, 'доступна', 'недоступна'),
-    ml: fromStatus(health.data.ml, 'доступен', 'недоступен'),
+    ml: ML_STATES[health.data.ml],
   }
 }
 
@@ -107,7 +112,11 @@ export function HealthIndicator() {
                 </span>
               )}
               <span data-part={key} data-status={light} className={cx('inline-flex items-center gap-1', COLORS[light])}>
-                <Icon aria-hidden className="size-3.5" strokeWidth={2.25} />
+                <Icon
+                  aria-hidden
+                  className={light === 'loading' ? 'size-4 text-warn-spinner motion-safe:animate-spin' : 'size-3.5'}
+                  strokeWidth={light === 'loading' ? 2.75 : 2.25}
+                />
                 {label}
               </span>
             </Fragment>

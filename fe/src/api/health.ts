@@ -3,12 +3,13 @@ import { useQuery } from '@tanstack/react-query'
 import { ApiError, apiGet } from './client'
 
 export type PartStatus = 'ok' | 'error'
+export type MlStatus = PartStatus | 'loading'
 
 /** Ответ GET /health бэкенда — docs/conventions.md, раздел 7 */
 export interface HealthResponse {
   status: 'ok'
   db: PartStatus
-  ml: PartStatus
+  ml: MlStatus
 }
 
 /** Как часто опрашиваем /health, пока вкладка открыта */
@@ -21,7 +22,7 @@ const isPartStatus = (value: unknown): value is PartStatus => value === 'ok' || 
 export function parseHealth(body: unknown): HealthResponse {
   if (typeof body === 'object' && body !== null && 'status' in body && 'db' in body && 'ml' in body) {
     const { status, db, ml } = body
-    if (status === 'ok' && isPartStatus(db) && isPartStatus(ml)) return { status, db, ml }
+    if (status === 'ok' && isPartStatus(db) && (isPartStatus(ml) || ml === 'loading')) return { status, db, ml }
   }
   throw new ApiError('Ответ /health не совпадает с форматом из docs/conventions.md', { kind: 'parse' })
 }
